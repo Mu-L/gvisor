@@ -145,6 +145,7 @@ func (n *notifier) hasFD(fd int32) bool {
 // dispatched to the registered queue.
 func (n *notifier) waitAndNotify() error {
 	e := make([]syscall.EpollEvent, 100)
+	queues := make([]*waiter.Queue, 100)
 	for {
 		v, err := epollWait(n.epFD, e, -1)
 		if err == syscall.EINTR {
@@ -155,13 +156,20 @@ func (n *notifier) waitAndNotify() error {
 			return err
 		}
 
+		// Be careful not to call fdInfo.queue.Notify() while holding
+		// n.mu, since that calls `waiter.EntryCallback.Callback()`
+		// which may take arbitrary locks and lead to lock inversion.
+		// See b/170302202.
 		n.mu.Lock()
 		for i := 0; i < v; i++ {
 			if fi, ok := n.fdMap[e[i].Fd]; ok {
-				fi.queue.Notify(waiter.EventMaskFromLinux(e[i].Events))
+				queues[i] = fi.queue
 			}
 		}
 		n.mu.Unlock()
+		for i := 0; i < v; i++ {
+			queues[i].Notify(waiter.EventMaskFromLinux(e[i].Events))
+		}
 	}
 }
 
