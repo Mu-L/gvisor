@@ -12,53 +12,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build amd64
 // +build amd64
 
 package filter
 
 import (
-	"syscall"
-
-	"gvisor.dev/gvisor/pkg/abi/linux"
+	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/seccomp"
 )
 
 func init() {
-	allowedSyscalls[syscall.SYS_ARCH_PRCTL] = []seccomp.Rule{
-		// TODO(b/168828518): No longer used in Go 1.16+.
-		{seccomp.EqualTo(linux.ARCH_SET_FS)},
-	}
-
-	allowedSyscalls[syscall.SYS_CLONE] = []seccomp.Rule{
+	allowedSyscalls[unix.SYS_CLONE] = []seccomp.Rule{
 		// parent_tidptr and child_tidptr are always 0 because neither
 		// CLONE_PARENT_SETTID nor CLONE_CHILD_SETTID are used.
 		{
 			seccomp.EqualTo(
-				syscall.CLONE_VM |
-					syscall.CLONE_FS |
-					syscall.CLONE_FILES |
-					syscall.CLONE_SETTLS |
-					syscall.CLONE_SIGHAND |
-					syscall.CLONE_SYSVSEM |
-					syscall.CLONE_THREAD),
-			seccomp.MatchAny{}, // newsp
-			seccomp.EqualTo(0), // parent_tidptr
-			seccomp.EqualTo(0), // child_tidptr
-			seccomp.MatchAny{}, // tls
-		},
-		{
-			// TODO(b/168828518): No longer used in Go 1.16+ (on amd64).
-			seccomp.EqualTo(
-				syscall.CLONE_VM |
-					syscall.CLONE_FS |
-					syscall.CLONE_FILES |
-					syscall.CLONE_SIGHAND |
-					syscall.CLONE_SYSVSEM |
-					syscall.CLONE_THREAD),
+				unix.CLONE_VM |
+					unix.CLONE_FS |
+					unix.CLONE_FILES |
+					unix.CLONE_SETTLS |
+					unix.CLONE_SIGHAND |
+					unix.CLONE_SYSVSEM |
+					unix.CLONE_THREAD),
 			seccomp.MatchAny{}, // newsp
 			seccomp.EqualTo(0), // parent_tidptr
 			seccomp.EqualTo(0), // child_tidptr
 			seccomp.MatchAny{}, // tls
 		},
 	}
+}
+
+func archFstatAtSysNo() uintptr {
+	return unix.SYS_NEWFSTATAT
 }

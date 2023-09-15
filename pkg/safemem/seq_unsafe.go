@@ -17,9 +17,9 @@ package safemem
 import (
 	"bytes"
 	"fmt"
-	"syscall"
 	"unsafe"
 
+	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/gohacks"
 )
 
@@ -93,9 +93,9 @@ func BlockSeqFromSlice(slice []Block) BlockSeq {
 }
 
 // Preconditions:
-// * The combined length of all Blocks in slice <= limit.
-// * If len(slice) != 0, the first Block in slice has non-zero length and
-//   limit > 0.
+//   - The combined length of all Blocks in slice <= limit.
+//   - If len(slice) != 0, the first Block in slice has non-zero length and
+//     limit > 0.
 func blockSeqFromSliceLimited(slice []Block, limit uint64) BlockSeq {
 	switch len(slice) {
 	case 0:
@@ -178,17 +178,14 @@ func (bs BlockSeq) Tail() BlockSeq {
 	if bs.length < 0 {
 		return BlockSeq{}
 	}
-	head := (*Block)(bs.data).DropFirst(bs.offset)
+	data := (*Block)(bs.data)
+	head := data.DropFirst(bs.offset)
 	headLen := uint64(head.Len())
 	if headLen >= bs.limit {
 		// The head Block exhausts the limit, so the tail is empty.
 		return BlockSeq{}
 	}
-	var extSlice []Block
-	extSliceHdr := (*gohacks.SliceHeader)(unsafe.Pointer(&extSlice))
-	extSliceHdr.Data = bs.data
-	extSliceHdr.Len = bs.length
-	extSliceHdr.Cap = bs.length
+	extSlice := gohacks.Slice(data, bs.length)
 	tailSlice := skipEmpty(extSlice[1:])
 	tailLimit := bs.limit - headLen
 	return blockSeqFromSliceLimited(tailSlice, tailLimit)
@@ -304,12 +301,12 @@ func ZeroSeq(dsts BlockSeq) (uint64, error) {
 	return done, nil
 }
 
-// IovecsFromBlockSeq returns a []syscall.Iovec representing seq.
-func IovecsFromBlockSeq(bs BlockSeq) []syscall.Iovec {
-	iovs := make([]syscall.Iovec, 0, bs.NumBlocks())
+// IovecsFromBlockSeq returns a []unix.Iovec representing seq.
+func IovecsFromBlockSeq(bs BlockSeq) []unix.Iovec {
+	iovs := make([]unix.Iovec, 0, bs.NumBlocks())
 	for ; !bs.IsEmpty(); bs = bs.Tail() {
 		b := bs.Head()
-		iovs = append(iovs, syscall.Iovec{
+		iovs = append(iovs, unix.Iovec{
 			Base: &b.ToSlice()[0],
 			Len:  uint64(b.Len()),
 		})

@@ -81,6 +81,9 @@ const (
 	// IPv6AddressSize is the size, in bytes, of an IPv6 address.
 	IPv6AddressSize = 16
 
+	// IPv6AddressSizeBits is the size, in bits, of an IPv6 address.
+	IPv6AddressSizeBits = 128
+
 	// IPv6MaximumPayloadSize is the maximum size of a valid IPv6 payload per
 	// RFC 8200 Section 4.5.
 	IPv6MaximumPayloadSize = 65535
@@ -91,36 +94,15 @@ const (
 	// IPv6Version is the version of the ipv6 protocol.
 	IPv6Version = 6
 
-	// IPv6AllNodesMulticastAddress is a link-local multicast group that
-	// all IPv6 nodes MUST join, as per RFC 4291, section 2.8. Packets
-	// destined to this address will reach all nodes on a link.
-	//
-	// The address is ff02::1.
-	IPv6AllNodesMulticastAddress tcpip.Address = "\xff\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01"
-
-	// IPv6AllRoutersMulticastAddress is a link-local multicast group that
-	// all IPv6 routers MUST join, as per RFC 4291, section 2.8. Packets
-	// destined to this address will reach all routers on a link.
-	//
-	// The address is ff02::2.
-	IPv6AllRoutersMulticastAddress tcpip.Address = "\xff\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02"
+	// IIDSize is the size of an interface identifier (IID), in bytes, as
+	// defined by RFC 4291 section 2.5.1.
+	IIDSize = 8
 
 	// IPv6MinimumMTU is the minimum MTU required by IPv6, per RFC 8200,
 	// section 5:
 	//   IPv6 requires that every link in the Internet have an MTU of 1280 octets
 	//   or greater.  This is known as the IPv6 minimum link MTU.
 	IPv6MinimumMTU = 1280
-
-	// IPv6Loopback is the IPv6 Loopback address.
-	IPv6Loopback tcpip.Address = "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01"
-
-	// IPv6Any is the non-routable IPv6 "any" meta address. It is also
-	// known as the unspecified address.
-	IPv6Any tcpip.Address = "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-
-	// IIDSize is the size of an interface identifier (IID), in bytes, as
-	// defined by RFC 4291 section 2.5.1.
-	IIDSize = 8
 
 	// IIDOffsetInIPv6Address is the offset, in bytes, from the start
 	// of an IPv6 address to the beginning of the interface identifier
@@ -142,11 +124,44 @@ const (
 	// ipv6MulticastAddressScopeMask is the mask for the scope (scop) field,
 	// within the byte holding the field, as per RFC 4291 section 2.7.
 	ipv6MulticastAddressScopeMask = 0xF
+)
 
-	// ipv6LinkLocalMulticastScope is the value of the scope (scop) field within
-	// a multicast IPv6 address that indicates the address has link-local scope,
-	// as per RFC 4291 section 2.7.
-	ipv6LinkLocalMulticastScope = 2
+var (
+	// IPv6AllNodesMulticastAddress is a link-local multicast group that
+	// all IPv6 nodes MUST join, as per RFC 4291, section 2.8. Packets
+	// destined to this address will reach all nodes on a link.
+	//
+	// The address is ff02::1.
+	IPv6AllNodesMulticastAddress = tcpip.AddrFrom16([16]byte{0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01})
+
+	// IPv6AllRoutersInterfaceLocalMulticastAddress is an interface-local
+	// multicast group that all IPv6 routers MUST join, as per RFC 4291, section
+	// 2.8. Packets destined to this address will reach the router on an
+	// interface.
+	//
+	// The address is ff01::2.
+	IPv6AllRoutersInterfaceLocalMulticastAddress = tcpip.AddrFrom16([16]byte{0xff, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02})
+
+	// IPv6AllRoutersLinkLocalMulticastAddress is a link-local multicast group
+	// that all IPv6 routers MUST join, as per RFC 4291, section 2.8. Packets
+	// destined to this address will reach all routers on a link.
+	//
+	// The address is ff02::2.
+	IPv6AllRoutersLinkLocalMulticastAddress = tcpip.AddrFrom16([16]byte{0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02})
+
+	// IPv6AllRoutersSiteLocalMulticastAddress is a site-local multicast group
+	// that all IPv6 routers MUST join, as per RFC 4291, section 2.8. Packets
+	// destined to this address will reach all routers in a site.
+	//
+	// The address is ff05::2.
+	IPv6AllRoutersSiteLocalMulticastAddress = tcpip.AddrFrom16([16]byte{0xff, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02})
+
+	// IPv6Loopback is the IPv6 Loopback address.
+	IPv6Loopback = tcpip.AddrFrom16([16]byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01})
+
+	// IPv6Any is the non-routable IPv6 "any" meta address. It is also
+	// known as the unspecified address.
+	IPv6Any = tcpip.AddrFrom16([16]byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 )
 
 // IPv6EmptySubnet is the empty IPv6 subnet. It may also be known as the
@@ -160,7 +175,7 @@ var IPv6EmptySubnet = tcpip.AddressWithPrefix{
 // IPv4MappedIPv6Subnet is the prefix for an IPv4 mapped IPv6 address as defined
 // by RFC 4291 section 2.5.5.
 var IPv4MappedIPv6Subnet = tcpip.AddressWithPrefix{
-	Address:   "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\x00\x00\x00\x00",
+	Address:   tcpip.AddrFrom16([16]byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00}),
 	PrefixLen: 96,
 }.Subnet()
 
@@ -169,7 +184,7 @@ var IPv4MappedIPv6Subnet = tcpip.AddressWithPrefix{
 //
 // The prefix is fe80::/64
 var IPv6LinkLocalPrefix = tcpip.AddressWithPrefix{
-	Address:   "\xfe\x80\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+	Address:   tcpip.AddrFrom16([16]byte{0xfe, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}),
 	PrefixLen: 64,
 }
 
@@ -201,13 +216,13 @@ func (b IPv6) Payload() []byte {
 
 // SourceAddress returns the "source address" field of the ipv6 header.
 func (b IPv6) SourceAddress() tcpip.Address {
-	return tcpip.Address(b[v6SrcAddr:][:IPv6AddressSize])
+	return tcpip.AddrFrom16([16]byte(b[v6SrcAddr:][:IPv6AddressSize]))
 }
 
 // DestinationAddress returns the "destination address" field of the ipv6
 // header.
 func (b IPv6) DestinationAddress() tcpip.Address {
-	return tcpip.Address(b[v6DstAddr:][:IPv6AddressSize])
+	return tcpip.AddrFrom16([16]byte(b[v6DstAddr:][:IPv6AddressSize]))
 }
 
 // Checksum implements Network.Checksum. Given that IPv6 doesn't have a
@@ -235,13 +250,13 @@ func (b IPv6) SetPayloadLength(payloadLength uint16) {
 
 // SetSourceAddress sets the "source address" field of the ipv6 header.
 func (b IPv6) SetSourceAddress(addr tcpip.Address) {
-	copy(b[v6SrcAddr:][:IPv6AddressSize], addr)
+	copy(b[v6SrcAddr:][:IPv6AddressSize], addr.AsSlice())
 }
 
 // SetDestinationAddress sets the "destination address" field of the ipv6
 // header.
 func (b IPv6) SetDestinationAddress(addr tcpip.Address) {
-	copy(b[v6DstAddr:][:IPv6AddressSize], addr)
+	copy(b[v6DstAddr:][:IPv6AddressSize], addr.AsSlice())
 }
 
 // SetHopLimit sets the value of the "Hop Limit" field.
@@ -292,7 +307,7 @@ func (b IPv6) IsValid(pktSize int) bool {
 // IsV4MappedAddress determines if the provided address is an IPv4 mapped
 // address by checking if its prefix is 0:0:0:0:0:ffff::/96.
 func IsV4MappedAddress(addr tcpip.Address) bool {
-	if len(addr) != IPv6AddressSize {
+	if addr.BitLen() != IPv6AddressSizeBits {
 		return false
 	}
 
@@ -302,10 +317,10 @@ func IsV4MappedAddress(addr tcpip.Address) bool {
 // IsV6MulticastAddress determines if the provided address is an IPv6
 // multicast address (anything starting with FF).
 func IsV6MulticastAddress(addr tcpip.Address) bool {
-	if len(addr) != IPv6AddressSize {
+	if addr.BitLen() != IPv6AddressSizeBits {
 		return false
 	}
-	return addr[0] == 0xff
+	return addr.As16()[0] == 0xff
 }
 
 // IsV6UnicastAddress determines if the provided address is a valid IPv6
@@ -313,7 +328,7 @@ func IsV6MulticastAddress(addr tcpip.Address) bool {
 // true if addr contains IPv6AddressSize bytes, is not the unspecified
 // address and is not a multicast address.
 func IsV6UnicastAddress(addr tcpip.Address) bool {
-	if len(addr) != IPv6AddressSize {
+	if addr.BitLen() != IPv6AddressSizeBits {
 		return false
 	}
 
@@ -323,22 +338,24 @@ func IsV6UnicastAddress(addr tcpip.Address) bool {
 	}
 
 	// Return if not a multicast.
-	return addr[0] != 0xff
+	return addr.As16()[0] != 0xff
 }
 
-const solicitedNodeMulticastPrefix = "\xff\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\xff"
+var solicitedNodeMulticastPrefix = [13]byte{0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xff}
 
 // SolicitedNodeAddr computes the solicited-node multicast address. This is
 // used for NDP. Described in RFC 4291. The argument must be a full-length IPv6
 // address.
 func SolicitedNodeAddr(addr tcpip.Address) tcpip.Address {
-	return solicitedNodeMulticastPrefix + addr[len(addr)-3:]
+	addrBytes := addr.As16()
+	return tcpip.AddrFrom16([16]byte(append(solicitedNodeMulticastPrefix[:], addrBytes[len(addrBytes)-3:]...)))
 }
 
 // IsSolicitedNodeAddr determines whether the address is a solicited-node
 // multicast address.
 func IsSolicitedNodeAddr(addr tcpip.Address) bool {
-	return solicitedNodeMulticastPrefix == addr[:len(addr)-3]
+	addrBytes := addr.As16()
+	return solicitedNodeMulticastPrefix == [13]byte(addrBytes[:len(addrBytes)-3])
 }
 
 // EthernetAdddressToModifiedEUI64IntoBuf populates buf with a modified EUI-64
@@ -378,28 +395,29 @@ func LinkLocalAddr(linkAddr tcpip.LinkAddress) tcpip.Address {
 		1: 0x80,
 	}
 	EthernetAdddressToModifiedEUI64IntoBuf(linkAddr, lladdrb[IIDOffsetInIPv6Address:])
-	return tcpip.Address(lladdrb[:])
+	return tcpip.AddrFrom16(lladdrb)
 }
 
-// IsV6LinkLocalAddress determines if the provided address is an IPv6
-// link-local address (fe80::/10).
-func IsV6LinkLocalAddress(addr tcpip.Address) bool {
-	if len(addr) != IPv6AddressSize {
+// IsV6LinkLocalUnicastAddress returns true iff the provided address is an IPv6
+// link-local unicast address, as defined by RFC 4291 section 2.5.6.
+func IsV6LinkLocalUnicastAddress(addr tcpip.Address) bool {
+	if addr.BitLen() != IPv6AddressSizeBits {
 		return false
 	}
-	return addr[0] == 0xfe && (addr[1]&0xc0) == 0x80
+	addrBytes := addr.As16()
+	return addrBytes[0] == 0xfe && (addrBytes[1]&0xc0) == 0x80
 }
 
-// IsV6LoopbackAddress determines if the provided address is an IPv6 loopback
-// address.
+// IsV6LoopbackAddress returns true iff the provided address is an IPv6 loopback
+// address, as defined by RFC 4291 section 2.5.3.
 func IsV6LoopbackAddress(addr tcpip.Address) bool {
 	return addr == IPv6Loopback
 }
 
-// IsV6LinkLocalMulticastAddress determines if the provided address is an IPv6
-// link-local multicast address.
+// IsV6LinkLocalMulticastAddress returns true iff the provided address is an
+// IPv6 link-local multicast address, as defined by RFC 4291 section 2.7.
 func IsV6LinkLocalMulticastAddress(addr tcpip.Address) bool {
-	return IsV6MulticastAddress(addr) && addr[ipv6MulticastAddressScopeByteIdx]&ipv6MulticastAddressScopeMask == ipv6LinkLocalMulticastScope
+	return IsV6MulticastAddress(addr) && V6MulticastScope(addr) == IPv6LinkLocalMulticastScope
 }
 
 // AppendOpaqueInterfaceIdentifier appends a 64 bit opaque interface identifier
@@ -419,7 +437,8 @@ func AppendOpaqueInterfaceIdentifier(buf []byte, prefix tcpip.Subnet, nicName st
 	// Note, we omit the optional Network_ID field.
 	h := sha256.New()
 	// h.Write never returns an error.
-	h.Write([]byte(prefix.ID()[:IIDOffsetInIPv6Address]))
+	prefixID := prefix.ID()
+	h.Write([]byte(prefixID.AsSlice()[:IIDOffsetInIPv6Address]))
 	h.Write([]byte(nicName))
 	h.Write([]byte{dadCounter})
 	h.Write(secretKey)
@@ -438,7 +457,7 @@ func LinkLocalAddrWithOpaqueIID(nicName string, dadCounter uint8, secretKey []by
 		1: 0x80,
 	}
 
-	return tcpip.Address(AppendOpaqueInterfaceIdentifier(lladdrb[:IIDOffsetInIPv6Address], IPv6LinkLocalPrefix.Subnet(), nicName, dadCounter, secretKey))
+	return tcpip.AddrFrom16([16]byte(AppendOpaqueInterfaceIdentifier(lladdrb[:IIDOffsetInIPv6Address], IPv6LinkLocalPrefix.Subnet(), nicName, dadCounter, secretKey)))
 }
 
 // IPv6AddressScope is the scope of an IPv6 address.
@@ -454,7 +473,7 @@ const (
 
 // ScopeForIPv6Address returns the scope for an IPv6 address.
 func ScopeForIPv6Address(addr tcpip.Address) (IPv6AddressScope, tcpip.Error) {
-	if len(addr) != IPv6AddressSize {
+	if addr.BitLen() != IPv6AddressSizeBits {
 		return GlobalScope, &tcpip.ErrBadAddress{}
 	}
 
@@ -462,7 +481,7 @@ func ScopeForIPv6Address(addr tcpip.Address) (IPv6AddressScope, tcpip.Error) {
 	case IsV6LinkLocalMulticastAddress(addr):
 		return LinkLocalScope, nil
 
-	case IsV6LinkLocalAddress(addr):
+	case IsV6LinkLocalUnicastAddress(addr):
 		return LinkLocalScope, nil
 
 	default:
@@ -498,7 +517,7 @@ func InitialTempIID(initialTempIIDHistory []byte, seed []byte, nicID tcpip.NICID
 //
 // Panics if tempIIDHistory is not at least IIDSize bytes.
 func GenerateTempIPv6SLAACAddr(tempIIDHistory []byte, stableAddr tcpip.Address) tcpip.AddressWithPrefix {
-	addrBytes := []byte(stableAddr)
+	addrBytes := stableAddr.As16()
 	h := sha256.New()
 	h.Write(tempIIDHistory)
 	h.Write(addrBytes[IIDOffsetInIPv6Address:])
@@ -516,7 +535,51 @@ func GenerateTempIPv6SLAACAddr(tempIIDHistory []byte, stableAddr tcpip.Address) 
 	}
 
 	return tcpip.AddressWithPrefix{
-		Address:   tcpip.Address(addrBytes),
+		Address:   tcpip.AddrFrom16(addrBytes),
 		PrefixLen: IIDOffsetInIPv6Address * 8,
 	}
+}
+
+// IPv6MulticastScope is the scope of a multicast IPv6 address, as defined by
+// RFC 7346 section 2.
+type IPv6MulticastScope uint8
+
+// The various values for IPv6 multicast scopes, as per RFC 7346 section 2:
+//
+//	+------+--------------------------+-------------------------+
+//	| scop | NAME                     | REFERENCE               |
+//	+------+--------------------------+-------------------------+
+//	|  0   | Reserved                 | [RFC4291], RFC 7346     |
+//	|  1   | Interface-Local scope    | [RFC4291], RFC 7346     |
+//	|  2   | Link-Local scope         | [RFC4291], RFC 7346     |
+//	|  3   | Realm-Local scope        | [RFC4291], RFC 7346     |
+//	|  4   | Admin-Local scope        | [RFC4291], RFC 7346     |
+//	|  5   | Site-Local scope         | [RFC4291], RFC 7346     |
+//	|  6   | Unassigned               |                         |
+//	|  7   | Unassigned               |                         |
+//	|  8   | Organization-Local scope | [RFC4291], RFC 7346     |
+//	|  9   | Unassigned               |                         |
+//	|  A   | Unassigned               |                         |
+//	|  B   | Unassigned               |                         |
+//	|  C   | Unassigned               |                         |
+//	|  D   | Unassigned               |                         |
+//	|  E   | Global scope             | [RFC4291], RFC 7346     |
+//	|  F   | Reserved                 | [RFC4291], RFC 7346     |
+//	+------+--------------------------+-------------------------+
+const (
+	IPv6Reserved0MulticastScope         = IPv6MulticastScope(0x0)
+	IPv6InterfaceLocalMulticastScope    = IPv6MulticastScope(0x1)
+	IPv6LinkLocalMulticastScope         = IPv6MulticastScope(0x2)
+	IPv6RealmLocalMulticastScope        = IPv6MulticastScope(0x3)
+	IPv6AdminLocalMulticastScope        = IPv6MulticastScope(0x4)
+	IPv6SiteLocalMulticastScope         = IPv6MulticastScope(0x5)
+	IPv6OrganizationLocalMulticastScope = IPv6MulticastScope(0x8)
+	IPv6GlobalMulticastScope            = IPv6MulticastScope(0xE)
+	IPv6ReservedFMulticastScope         = IPv6MulticastScope(0xF)
+)
+
+// V6MulticastScope returns the scope of a multicast address.
+func V6MulticastScope(addr tcpip.Address) IPv6MulticastScope {
+	addrBytes := addr.As16()
+	return IPv6MulticastScope(addrBytes[ipv6MulticastAddressScopeByteIdx] & ipv6MulticastAddressScopeMask)
 }

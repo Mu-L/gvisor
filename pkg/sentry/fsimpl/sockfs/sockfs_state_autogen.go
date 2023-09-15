@@ -16,12 +16,14 @@ func (fsType *filesystemType) StateFields() []string {
 
 func (fsType *filesystemType) beforeSave() {}
 
+// +checklocksignore
 func (fsType *filesystemType) StateSave(stateSinkObject state.Sink) {
 	fsType.beforeSave()
 }
 
 func (fsType *filesystemType) afterLoad() {}
 
+// +checklocksignore
 func (fsType *filesystemType) StateLoad(stateSourceObject state.Source) {
 }
 
@@ -38,6 +40,7 @@ func (fs *filesystem) StateFields() []string {
 
 func (fs *filesystem) beforeSave() {}
 
+// +checklocksignore
 func (fs *filesystem) StateSave(stateSinkObject state.Sink) {
 	fs.beforeSave()
 	stateSinkObject.Save(0, &fs.Filesystem)
@@ -46,6 +49,7 @@ func (fs *filesystem) StateSave(stateSinkObject state.Sink) {
 
 func (fs *filesystem) afterLoad() {}
 
+// +checklocksignore
 func (fs *filesystem) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &fs.Filesystem)
 	stateSourceObject.Load(1, &fs.devMinor)
@@ -57,30 +61,38 @@ func (i *inode) StateTypeName() string {
 
 func (i *inode) StateFields() []string {
 	return []string{
+		"InodeAnonymous",
 		"InodeAttrs",
 		"InodeNoopRefCount",
 		"InodeNotDirectory",
 		"InodeNotSymlink",
+		"InodeWatches",
 	}
 }
 
 func (i *inode) beforeSave() {}
 
+// +checklocksignore
 func (i *inode) StateSave(stateSinkObject state.Sink) {
 	i.beforeSave()
-	stateSinkObject.Save(0, &i.InodeAttrs)
-	stateSinkObject.Save(1, &i.InodeNoopRefCount)
-	stateSinkObject.Save(2, &i.InodeNotDirectory)
-	stateSinkObject.Save(3, &i.InodeNotSymlink)
+	stateSinkObject.Save(0, &i.InodeAnonymous)
+	stateSinkObject.Save(1, &i.InodeAttrs)
+	stateSinkObject.Save(2, &i.InodeNoopRefCount)
+	stateSinkObject.Save(3, &i.InodeNotDirectory)
+	stateSinkObject.Save(4, &i.InodeNotSymlink)
+	stateSinkObject.Save(5, &i.InodeWatches)
 }
 
 func (i *inode) afterLoad() {}
 
+// +checklocksignore
 func (i *inode) StateLoad(stateSourceObject state.Source) {
-	stateSourceObject.Load(0, &i.InodeAttrs)
-	stateSourceObject.Load(1, &i.InodeNoopRefCount)
-	stateSourceObject.Load(2, &i.InodeNotDirectory)
-	stateSourceObject.Load(3, &i.InodeNotSymlink)
+	stateSourceObject.Load(0, &i.InodeAnonymous)
+	stateSourceObject.Load(1, &i.InodeAttrs)
+	stateSourceObject.Load(2, &i.InodeNoopRefCount)
+	stateSourceObject.Load(3, &i.InodeNotDirectory)
+	stateSourceObject.Load(4, &i.InodeNotSymlink)
+	stateSourceObject.Load(5, &i.InodeWatches)
 }
 
 func init() {

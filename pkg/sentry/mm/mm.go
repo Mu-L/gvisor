@@ -17,17 +17,19 @@
 //
 // Lock order:
 //
-// fs locks, except for memmap.Mappable locks
-//   mm.MemoryManager.metadataMu
-//     mm.MemoryManager.mappingMu
-//       Locks taken by memmap.Mappable methods other than Translate
-//         mm.MemoryManager.activeMu
-//           Locks taken by memmap.Mappable.Translate
-//             mm.privateRefs.mu
-//               platform.AddressSpace locks
-//                 memmap.File locks
-//         mm.aioManager.mu
-//           mm.AIOContext.mu
+//	 fs locks, except for memmap.Mappable locks
+//		mm.MemoryManager.metadataMu
+//			mm.MemoryManager.mappingMu
+//				Locks taken by memmap.MappingIdentity and memmap.Mappable methods other
+//				than Translate
+//					kernel.TaskSet.mu
+//						mm.MemoryManager.activeMu
+//							Locks taken by memmap.Mappable.Translate
+//								mm.privateRefs.mu
+//									platform.AddressSpace locks
+//										memmap.File locks
+//					mm.aioManager.mu
+//						mm.AIOContext.mu
 //
 // Only mm.MemoryManager.Fork is permitted to lock mm.MemoryManager.activeMu in
 // multiple mm.MemoryManagers, as it does so in a well-defined order (forked
@@ -35,16 +37,21 @@
 package mm
 
 import (
+	"sync/atomic"
+
 	"gvisor.dev/gvisor/pkg/abi/linux"
+	"gvisor.dev/gvisor/pkg/atomicbitops"
+	"gvisor.dev/gvisor/pkg/hostarch"
 	"gvisor.dev/gvisor/pkg/safemem"
 	"gvisor.dev/gvisor/pkg/sentry/arch"
-	"gvisor.dev/gvisor/pkg/sentry/fsbridge"
 	"gvisor.dev/gvisor/pkg/sentry/memmap"
 	"gvisor.dev/gvisor/pkg/sentry/pgalloc"
 	"gvisor.dev/gvisor/pkg/sentry/platform"
-	"gvisor.dev/gvisor/pkg/sync"
-	"gvisor.dev/gvisor/pkg/usermem"
+	"gvisor.dev/gvisor/pkg/sentry/vfs"
 )
+
+// MapsCallbackFunc has all the parameters required for populating an entry of /proc/[pid]/maps.
+type MapsCallbackFunc func(start, end hostarch.Addr, permissions hostarch.AccessType, private string, offset uint64, devMajor, devMinor uint32, inode uint64, path string)
 
 // MemoryManager implements a virtual address space.
 //
@@ -76,12 +83,10 @@ type MemoryManager struct {
 	// users is the number of dependencies on the mappings in the MemoryManager.
 	// When the number of references in users reaches zero, all mappings are
 	// unmapped.
-	//
-	// users is accessed using atomic memory operations.
-	users int32
+	users atomicbitops.Int32
 
 	// mappingMu is analogous to Linux's struct mm_struct::mmap_sem.
-	mappingMu sync.RWMutex `state:"nosave"`
+	mappingMu mappingRWMutex `state:"nosave"`
 
 	// vmas stores virtual memory areas. Since vmas are stored by value,
 	// clients should usually use vmaIterator.ValuePtr() instead of
@@ -97,7 +102,7 @@ type MemoryManager struct {
 	// binary into the mm.
 	//
 	// brk is protected by mappingMu.
-	brk usermem.AddrRange
+	brk hostarch.AddrRange
 
 	// usageAS is vmas.Span(), cached to accelerate RLIMIT_AS checks.
 	//
@@ -124,7 +129,7 @@ type MemoryManager struct {
 
 	// activeMu is loosely analogous to Linux's struct
 	// mm_struct::page_table_lock.
-	activeMu sync.RWMutex `state:"nosave"`
+	activeMu activeRWMutex `state:"nosave"`
 
 	// pmas stores platform mapping areas used to implement vmas. Since pmas
 	// are stored by value, clients should usually use pmaIterator.ValuePtr()
@@ -166,7 +171,7 @@ type MemoryManager struct {
 	// activeMu. (This is because such transitions may need to be atomic with
 	// changes to as.)
 	as     platform.AddressSpace `state:"nosave"`
-	active int32                 `state:"zerovalue"`
+	active atomicbitops.Int32    `state:"zerovalue"`
 
 	// unmapAllOnActivate indicates that the next Activate call should activate
 	// an empty AddressSpace.
@@ -191,21 +196,26 @@ type MemoryManager struct {
 	captureInvalidations  bool             `state:"zerovalue"`
 	capturedInvalidations []invalidateArgs `state:"nosave"`
 
-	metadataMu sync.Mutex `state:"nosave"`
+	// dumpability describes if and how this MemoryManager may be dumped to
+	// userspace. This is read under kernel.TaskSet.mu, so it can't be protected
+	// by metadataMu.
+	dumpability atomicbitops.Int32
+
+	metadataMu metadataMutex `state:"nosave"`
 
 	// argv is the application argv. This is set up by the loader and may be
 	// modified by prctl(PR_SET_MM_ARG_START/PR_SET_MM_ARG_END). No
 	// requirements apply to argv; we do not require that argv.WellFormed().
 	//
 	// argv is protected by metadataMu.
-	argv usermem.AddrRange
+	argv hostarch.AddrRange
 
 	// envv is the application envv. This is set up by the loader and may be
 	// modified by prctl(PR_SET_MM_ENV_START/PR_SET_MM_ENV_END). No
 	// requirements apply to envv; we do not require that envv.WellFormed().
 	//
 	// envv is protected by metadataMu.
-	envv usermem.AddrRange
+	envv hostarch.AddrRange
 
 	// auxv is the ELF's auxiliary vector.
 	//
@@ -216,13 +226,7 @@ type MemoryManager struct {
 	// is not nil, it holds a reference on the Dirent.
 	//
 	// executable is protected by metadataMu.
-	executable fsbridge.File
-
-	// dumpability describes if and how this MemoryManager may be dumped to
-	// userspace.
-	//
-	// dumpability is protected by metadataMu.
-	dumpability Dumpability
+	executable *vfs.FileDescription
 
 	// aioManager keeps track of AIOContexts used for async IOs. AIOManager
 	// must be cloned when CLONE_VM is used.
@@ -240,18 +244,17 @@ type MemoryManager struct {
 	// previously been called. Since, as of this writing,
 	// MEMBARRIER_CMD_PRIVATE_EXPEDITED is implemented as a global memory
 	// barrier, membarrierPrivateEnabled has no other effect.
-	//
-	// membarrierPrivateEnabled is accessed using atomic memory operations.
-	membarrierPrivateEnabled uint32
+	membarrierPrivateEnabled atomicbitops.Uint32
 
 	// membarrierRSeqEnabled is non-zero if EnableMembarrierRSeq has previously
 	// been called.
-	//
-	// membarrierRSeqEnabled is accessed using atomic memory operations.
-	membarrierRSeqEnabled uint32
+	membarrierRSeqEnabled atomicbitops.Uint32
 }
 
 // vma represents a virtual memory area.
+//
+// Note: new fields added to this struct must be added to vma.Copy and
+// vmaSetFunctions.Merge.
 //
 // +stateify savable
 type vma struct {
@@ -268,20 +271,20 @@ type vma struct {
 
 	// realPerms are the memory permissions on this vma, as defined by the
 	// application.
-	realPerms usermem.AccessType `state:".(int)"`
+	realPerms hostarch.AccessType `state:".(int)"`
 
 	// effectivePerms are the memory permissions on this vma which are
 	// actually used to control access.
 	//
 	// Invariant: effectivePerms == realPerms.Effective().
-	effectivePerms usermem.AccessType `state:"manual"`
+	effectivePerms hostarch.AccessType `state:"manual"`
 
 	// maxPerms limits the set of permissions that may ever apply to this
 	// memory, as well as accesses for which usermem.IOOpts.IgnorePermissions
 	// is true (e.g. ptrace(PTRACE_POKEDATA)).
 	//
 	// Invariant: maxPerms == maxPerms.Effective().
-	maxPerms usermem.AccessType `state:"manual"`
+	maxPerms hostarch.AccessType `state:"manual"`
 
 	// private is true if this is a MAP_PRIVATE mapping, such that writes to
 	// the mapping are propagated to a copy.
@@ -313,6 +316,13 @@ type vma struct {
 	// If hint is non-empty, it is a description of the vma printed in
 	// /proc/[pid]/maps. hint takes priority over id.MappedName().
 	hint string
+
+	// lastFault records the last address that was paged faulted. It hints at
+	// which direction addresses in this vma are being accessed.
+	//
+	// This field can be read atomically, and written with mm.activeMu locked for
+	// writing and mm.mapping locked.
+	lastFault uintptr
 }
 
 const (
@@ -403,6 +413,25 @@ func (v *vma) loadRealPerms(b int) {
 	}
 }
 
+func (v *vma) copy() vma {
+	return vma{
+		mappable:       v.mappable,
+		off:            v.off,
+		realPerms:      v.realPerms,
+		effectivePerms: v.effectivePerms,
+		maxPerms:       v.maxPerms,
+		private:        v.private,
+		growsDown:      v.growsDown,
+		dontfork:       v.dontfork,
+		mlockMode:      v.mlockMode,
+		numaPolicy:     v.numaPolicy,
+		numaNodemask:   v.numaNodemask,
+		id:             v.id,
+		hint:           v.hint,
+		lastFault:      atomic.LoadUintptr(&v.lastFault),
+	}
+}
+
 // pma represents a platform mapping area.
 //
 // +stateify savable
@@ -421,8 +450,8 @@ type pma struct {
 	off uint64
 
 	// translatePerms is the permissions returned by memmap.Mappable.Translate.
-	// If private is true, translatePerms is usermem.AnyAccess.
-	translatePerms usermem.AccessType
+	// If private is true, translatePerms is hostarch.AnyAccess.
+	translatePerms hostarch.AccessType
 
 	// effectivePerms is the permissions allowed for non-ignorePermissions
 	// accesses. maxPerms is the permissions allowed for ignorePermissions
@@ -432,8 +461,8 @@ type pma struct {
 	//
 	// These are stored in the pma so that the IO implementation can avoid
 	// iterating mm.vmas when pmas already exist.
-	effectivePerms usermem.AccessType
-	maxPerms       usermem.AccessType
+	effectivePerms hostarch.AccessType
+	maxPerms       hostarch.AccessType
 
 	// needCOW is true if writes to the mapping must be propagated to a copy.
 	needCOW bool
@@ -456,7 +485,7 @@ type pma struct {
 
 // +stateify savable
 type privateRefs struct {
-	mu sync.Mutex `state:"nosave"`
+	mu privateRefsMutex `state:"nosave"`
 
 	// refs maps offsets into MemoryManager.mfp.MemoryFile() to the number of
 	// pmas (or, equivalently, MemoryManagers) that share ownership of the
@@ -465,7 +494,7 @@ type privateRefs struct {
 }
 
 type invalidateArgs struct {
-	ar   usermem.AddrRange
+	ar   hostarch.AddrRange
 	opts memmap.InvalidateOpts
 }
 

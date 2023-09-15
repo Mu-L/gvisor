@@ -12,22 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build go1.1
+// +build go1.1
+
 package filter
 
 import (
-	"syscall"
-
+	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/seccomp"
 )
 
 // profileFilters returns extra syscalls made by runtime/pprof package.
 func profileFilters() seccomp.SyscallRules {
 	return seccomp.SyscallRules{
-		syscall.SYS_OPENAT: []seccomp.Rule{
+		unix.SYS_OPENAT: []seccomp.Rule{
 			{
 				seccomp.MatchAny{},
 				seccomp.MatchAny{},
-				seccomp.EqualTo(syscall.O_RDONLY | syscall.O_LARGEFILE | syscall.O_CLOEXEC),
+				seccomp.EqualTo(unix.O_RDONLY | unix.O_LARGEFILE | unix.O_CLOEXEC),
 			},
 		},
 	}

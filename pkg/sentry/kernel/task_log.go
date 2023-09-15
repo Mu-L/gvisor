@@ -20,6 +20,7 @@ import (
 	"sort"
 
 	"gvisor.dev/gvisor/pkg/context"
+	"gvisor.dev/gvisor/pkg/hostarch"
 	"gvisor.dev/gvisor/pkg/log"
 	"gvisor.dev/gvisor/pkg/usermem"
 )
@@ -34,21 +35,21 @@ const (
 )
 
 // Infof logs an formatted info message by calling log.Infof.
-func (t *Task) Infof(fmt string, v ...interface{}) {
+func (t *Task) Infof(fmt string, v ...any) {
 	if log.IsLogging(log.Info) {
 		log.InfofAtDepth(1, t.logPrefix.Load().(string)+fmt, v...)
 	}
 }
 
 // Warningf logs a warning string by calling log.Warningf.
-func (t *Task) Warningf(fmt string, v ...interface{}) {
+func (t *Task) Warningf(fmt string, v ...any) {
 	if log.IsLogging(log.Warning) {
 		log.WarningfAtDepth(1, t.logPrefix.Load().(string)+fmt, v...)
 	}
 }
 
 // Debugf creates a debug string that includes the task ID.
-func (t *Task) Debugf(fmt string, v ...interface{}) {
+func (t *Task) Debugf(fmt string, v ...any) {
 	if log.IsLogging(log.Debug) {
 		log.DebugfAtDepth(1, t.logPrefix.Load().(string)+fmt, v...)
 	}
@@ -108,9 +109,9 @@ func (t *Task) debugDumpStack() {
 		return
 	}
 	t.Debugf("Stack:")
-	start := usermem.Addr(t.Arch().Stack())
+	start := hostarch.Addr(t.Arch().Stack())
 	// Round addr down to a 16-byte boundary.
-	start &= ^usermem.Addr(15)
+	start &= ^hostarch.Addr(15)
 	// Print 16 bytes per line, one byte at a time.
 	for offset := uint64(0); offset < maxStackDebugBytes; offset += 16 {
 		addr, ok := start.AddLength(offset)
@@ -127,7 +128,7 @@ func (t *Task) debugDumpStack() {
 			t.Debugf("%x: % x", addr, data[:n])
 		}
 		if err != nil {
-			t.Debugf("Error reading stack at address %x: %v", addr+usermem.Addr(n), err)
+			t.Debugf("Error reading stack at address %x: %v", addr+hostarch.Addr(n), err)
 			break
 		}
 	}
@@ -147,9 +148,9 @@ func (t *Task) debugDumpCode() {
 	}
 	t.Debugf("Code:")
 	// Print code on both sides of the instruction register.
-	start := usermem.Addr(t.Arch().IP()) - maxCodeDebugBytes/2
+	start := hostarch.Addr(t.Arch().IP()) - maxCodeDebugBytes/2
 	// Round addr down to a 16-byte boundary.
-	start &= ^usermem.Addr(15)
+	start &= ^hostarch.Addr(15)
 	// Print 16 bytes per line, one byte at a time.
 	for offset := uint64(0); offset < maxCodeDebugBytes; offset += 16 {
 		addr, ok := start.AddLength(offset)
@@ -166,7 +167,7 @@ func (t *Task) debugDumpCode() {
 			t.Debugf("%x: % x", addr, data[:n])
 		}
 		if err != nil {
-			t.Debugf("Error reading stack at address %x: %v", addr+usermem.Addr(n), err)
+			t.Debugf("Error reading stack at address %x: %v", addr+hostarch.Addr(n), err)
 			break
 		}
 	}
@@ -181,7 +182,6 @@ const (
 	traceCategory = "task"
 	runRegion     = ":run"
 	blockRegion   = ":block"
-	cpuidRegion   = ":cpuid"
 	faultRegion   = ":fault"
 )
 
@@ -190,10 +190,18 @@ const (
 //
 // Preconditions: The task's owning TaskSet.mu must be locked.
 func (t *Task) updateInfoLocked() {
-	// Use the task's TID in the root PID namespace for logging.
-	tid := t.tg.pidns.owner.Root.tids[t]
-	t.logPrefix.Store(fmt.Sprintf("[% 4d] ", tid))
-	t.rebuildTraceContext(tid)
+	// Log the TID and PID in root pidns and t's pidns.
+	rootPID := t.tg.pidns.owner.Root.tgids[t.tg]
+	rootTID := t.tg.pidns.owner.Root.tids[t]
+	pid := t.tg.pidns.tgids[t.tg]
+	tid := t.tg.pidns.tids[t]
+	if rootPID == pid && rootTID == tid {
+		t.logPrefix.Store(fmt.Sprintf("[% 4d:% 4d] ", pid, tid))
+	} else {
+		t.logPrefix.Store(fmt.Sprintf("[% 4d(%4d):% 4d(%4d)] ", rootPID, pid, rootTID, tid))
+	}
+
+	t.rebuildTraceContext(rootTID)
 }
 
 // rebuildTraceContext rebuilds the trace context.
@@ -234,7 +242,7 @@ func (t *Task) traceExitEvent() {
 	if !trace.IsEnabled() {
 		return
 	}
-	trace.Logf(t.traceContext, traceCategory, "exit status: 0x%x", t.exitStatus.Status())
+	trace.Logf(t.traceContext, traceCategory, "exit status: %s", t.exitStatus)
 }
 
 // traceExecEvent is called when a task calls exec.
@@ -248,5 +256,9 @@ func (t *Task) traceExecEvent(image *TaskImage) {
 		return
 	}
 	defer file.DecRef(t)
-	trace.Logf(t.traceContext, traceCategory, "exec: %s", file.PathnameWithDeleted(t))
+
+	// traceExecEvent function may be called before the task goroutine
+	// starts, so we must use the async context.
+	name := file.MappedName(t.AsyncContext())
+	trace.Logf(t.traceContext, traceCategory, "exec: %s", name)
 }

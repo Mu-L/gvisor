@@ -32,7 +32,8 @@ import (
 	"gvisor.dev/gvisor/pkg/sentry/kernel"
 	pb "gvisor.dev/gvisor/pkg/sentry/strace/strace_go_proto"
 	slinux "gvisor.dev/gvisor/pkg/sentry/syscalls/linux"
-	"gvisor.dev/gvisor/pkg/usermem"
+
+	"gvisor.dev/gvisor/pkg/hostarch"
 )
 
 // DefaultLogMaximumSize is the default LogMaximumSize.
@@ -46,6 +47,10 @@ var LogMaximumSize uint = DefaultLogMaximumSize
 // etc.) sent over the event channel. Default is 0 because most clients cannot
 // do anything useful with binary text dump of byte array arguments.
 var EventMaximumSize uint
+
+// LogAppDataAllowed is set to true when printing application data in strace
+// logs is allowed.
+var LogAppDataAllowed = true
 
 // ItimerTypes are the possible itimer types.
 var ItimerTypes = abi.ValueSet{
@@ -62,7 +67,7 @@ func hexArg(arg arch.SyscallArgument) string {
 	return hexNum(arg.Uint64())
 }
 
-func iovecs(t *kernel.Task, addr usermem.Addr, iovcnt int, printContent bool, maxBytes uint64) string {
+func iovecs(t *kernel.Task, addr hostarch.Addr, iovcnt int, printContent bool, maxBytes uint64) string {
 	if iovcnt < 0 || iovcnt > linux.UIO_MAXIOV {
 		return fmt.Sprintf("%#x (error decoding iovecs: invalid iovcnt)", addr)
 	}
@@ -107,7 +112,10 @@ func iovecs(t *kernel.Task, addr usermem.Addr, iovcnt int, printContent bool, ma
 	return fmt.Sprintf("%#x %s", addr, strings.Join(iovs, ", "))
 }
 
-func dump(t *kernel.Task, addr usermem.Addr, size uint, maximumBlobSize uint) string {
+func dump(t *kernel.Task, addr hostarch.Addr, size uint, maximumBlobSize uint, printContent bool) string {
+	if !printContent {
+		return fmt.Sprintf("{base=%#x, len=%d}", addr, size)
+	}
 	origSize := size
 	if size > maximumBlobSize {
 		size = maximumBlobSize
@@ -131,7 +139,10 @@ func dump(t *kernel.Task, addr usermem.Addr, size uint, maximumBlobSize uint) st
 	return fmt.Sprintf("%#x %q%s", addr, b[:amt], dot)
 }
 
-func path(t *kernel.Task, addr usermem.Addr) string {
+func path(t *kernel.Task, addr hostarch.Addr) string {
+	if addr == 0 {
+		return "<null>"
+	}
 	path, err := t.CopyInString(addr, linux.PATH_MAX)
 	if err != nil {
 		return fmt.Sprintf("%#x (error decoding path: %s)", addr, err)
@@ -140,24 +151,15 @@ func path(t *kernel.Task, addr usermem.Addr) string {
 }
 
 func fd(t *kernel.Task, fd int32) string {
-	if kernel.VFS2Enabled {
-		return fdVFS2(t, fd)
-	}
-
 	root := t.FSContext().RootDirectory()
-	if root != nil {
-		defer root.DecRef(t)
-	}
+	defer root.DecRef(t)
 
+	vfsObj := root.Mount().Filesystem().VirtualFilesystem()
 	if fd == linux.AT_FDCWD {
 		wd := t.FSContext().WorkingDirectory()
-		var name string
-		if wd != nil {
-			defer wd.DecRef(t)
-			name, _ = wd.FullName(root)
-		} else {
-			name = "(unknown cwd)"
-		}
+		defer wd.DecRef(t)
+
+		name, _ := vfsObj.PathnameWithDeleted(t, root, wd)
 		return fmt.Sprintf("AT_FDCWD %s", name)
 	}
 
@@ -168,35 +170,11 @@ func fd(t *kernel.Task, fd int32) string {
 	}
 	defer file.DecRef(t)
 
-	name, _ := file.Dirent.FullName(root)
-	return fmt.Sprintf("%#x %s", fd, name)
-}
-
-func fdVFS2(t *kernel.Task, fd int32) string {
-	root := t.FSContext().RootDirectoryVFS2()
-	defer root.DecRef(t)
-
-	vfsObj := root.Mount().Filesystem().VirtualFilesystem()
-	if fd == linux.AT_FDCWD {
-		wd := t.FSContext().WorkingDirectoryVFS2()
-		defer wd.DecRef(t)
-
-		name, _ := vfsObj.PathnameWithDeleted(t, root, wd)
-		return fmt.Sprintf("AT_FDCWD %s", name)
-	}
-
-	file := t.GetFileVFS2(fd)
-	if file == nil {
-		// Cast FD to uint64 to avoid printing negative hex.
-		return fmt.Sprintf("%#x (bad FD)", uint64(fd))
-	}
-	defer file.DecRef(t)
-
 	name, _ := vfsObj.PathnameWithDeleted(t, root, file.VirtualDentry())
 	return fmt.Sprintf("%#x %s", fd, name)
 }
 
-func fdpair(t *kernel.Task, addr usermem.Addr) string {
+func fdpair(t *kernel.Task, addr hostarch.Addr) string {
 	var fds [2]int32
 	_, err := primitive.CopyInt32SliceIn(t, addr, fds[:])
 	if err != nil {
@@ -206,7 +184,7 @@ func fdpair(t *kernel.Task, addr usermem.Addr) string {
 	return fmt.Sprintf("%#x [%d %d]", addr, fds[0], fds[1])
 }
 
-func uname(t *kernel.Task, addr usermem.Addr) string {
+func uname(t *kernel.Task, addr hostarch.Addr) string {
 	var u linux.UtsName
 	if _, err := u.CopyIn(t, addr); err != nil {
 		return fmt.Sprintf("%#x (error decoding utsname: %s)", addr, err)
@@ -215,7 +193,7 @@ func uname(t *kernel.Task, addr usermem.Addr) string {
 	return fmt.Sprintf("%#x %s", addr, u)
 }
 
-func utimensTimespec(t *kernel.Task, addr usermem.Addr) string {
+func utimensTimespec(t *kernel.Task, addr hostarch.Addr) string {
 	if addr == 0 {
 		return "null"
 	}
@@ -237,7 +215,7 @@ func utimensTimespec(t *kernel.Task, addr usermem.Addr) string {
 	return fmt.Sprintf("%#x {sec=%v nsec=%s}", addr, tim.Sec, ns)
 }
 
-func timespec(t *kernel.Task, addr usermem.Addr) string {
+func timespec(t *kernel.Task, addr hostarch.Addr) string {
 	if addr == 0 {
 		return "null"
 	}
@@ -249,7 +227,7 @@ func timespec(t *kernel.Task, addr usermem.Addr) string {
 	return fmt.Sprintf("%#x {sec=%v nsec=%v}", addr, tim.Sec, tim.Nsec)
 }
 
-func timeval(t *kernel.Task, addr usermem.Addr) string {
+func timeval(t *kernel.Task, addr hostarch.Addr) string {
 	if addr == 0 {
 		return "null"
 	}
@@ -262,7 +240,7 @@ func timeval(t *kernel.Task, addr usermem.Addr) string {
 	return fmt.Sprintf("%#x {sec=%v usec=%v}", addr, tim.Sec, tim.Usec)
 }
 
-func utimbuf(t *kernel.Task, addr usermem.Addr) string {
+func utimbuf(t *kernel.Task, addr hostarch.Addr) string {
 	if addr == 0 {
 		return "null"
 	}
@@ -275,7 +253,7 @@ func utimbuf(t *kernel.Task, addr usermem.Addr) string {
 	return fmt.Sprintf("%#x {actime=%v, modtime=%v}", addr, utim.Actime, utim.Modtime)
 }
 
-func stat(t *kernel.Task, addr usermem.Addr) string {
+func stat(t *kernel.Task, addr hostarch.Addr) string {
 	if addr == 0 {
 		return "null"
 	}
@@ -287,27 +265,27 @@ func stat(t *kernel.Task, addr usermem.Addr) string {
 	return fmt.Sprintf("%#x {dev=%d, ino=%d, mode=%s, nlink=%d, uid=%d, gid=%d, rdev=%d, size=%d, blksize=%d, blocks=%d, atime=%s, mtime=%s, ctime=%s}", addr, stat.Dev, stat.Ino, linux.FileMode(stat.Mode), stat.Nlink, stat.UID, stat.GID, stat.Rdev, stat.Size, stat.Blksize, stat.Blocks, time.Unix(stat.ATime.Sec, stat.ATime.Nsec), time.Unix(stat.MTime.Sec, stat.MTime.Nsec), time.Unix(stat.CTime.Sec, stat.CTime.Nsec))
 }
 
-func itimerval(t *kernel.Task, addr usermem.Addr) string {
+func itimerval(t *kernel.Task, addr hostarch.Addr) string {
 	if addr == 0 {
 		return "null"
 	}
 
 	interval := timeval(t, addr)
-	value := timeval(t, addr+usermem.Addr((*linux.Timeval)(nil).SizeBytes()))
+	value := timeval(t, addr+hostarch.Addr((*linux.Timeval)(nil).SizeBytes()))
 	return fmt.Sprintf("%#x {interval=%s, value=%s}", addr, interval, value)
 }
 
-func itimerspec(t *kernel.Task, addr usermem.Addr) string {
+func itimerspec(t *kernel.Task, addr hostarch.Addr) string {
 	if addr == 0 {
 		return "null"
 	}
 
 	interval := timespec(t, addr)
-	value := timespec(t, addr+usermem.Addr((*linux.Timespec)(nil).SizeBytes()))
+	value := timespec(t, addr+hostarch.Addr((*linux.Timespec)(nil).SizeBytes()))
 	return fmt.Sprintf("%#x {interval=%s, value=%s}", addr, interval, value)
 }
 
-func stringVector(t *kernel.Task, addr usermem.Addr) string {
+func stringVector(t *kernel.Task, addr hostarch.Addr) string {
 	vec, err := t.CopyInVector(addr, slinux.ExecMaxElemSize, slinux.ExecMaxTotalSize)
 	if err != nil {
 		return fmt.Sprintf("%#x {error copying vector: %v}", addr, err)
@@ -323,7 +301,7 @@ func stringVector(t *kernel.Task, addr usermem.Addr) string {
 	return s
 }
 
-func rusage(t *kernel.Task, addr usermem.Addr) string {
+func rusage(t *kernel.Task, addr hostarch.Addr) string {
 	if addr == 0 {
 		return "null"
 	}
@@ -335,7 +313,7 @@ func rusage(t *kernel.Task, addr usermem.Addr) string {
 	return fmt.Sprintf("%#x %+v", addr, ru)
 }
 
-func capHeader(t *kernel.Task, addr usermem.Addr) string {
+func capHeader(t *kernel.Task, addr hostarch.Addr) string {
 	if addr == 0 {
 		return "null"
 	}
@@ -360,7 +338,7 @@ func capHeader(t *kernel.Task, addr usermem.Addr) string {
 	return fmt.Sprintf("%#x {Version: %s, Pid: %d}", addr, version, hdr.Pid)
 }
 
-func capData(t *kernel.Task, hdrAddr, dataAddr usermem.Addr) string {
+func capData(t *kernel.Task, hdrAddr, dataAddr hostarch.Addr) string {
 	if dataAddr == 0 {
 		return "null"
 	}
@@ -411,13 +389,13 @@ func (i *SyscallInfo) pre(t *kernel.Task, args arch.SyscallArguments, maximumBlo
 		case FD:
 			output = append(output, fd(t, args[arg].Int()))
 		case WriteBuffer:
-			output = append(output, dump(t, args[arg].Pointer(), args[arg+1].SizeT(), maximumBlobSize))
+			output = append(output, dump(t, args[arg].Pointer(), args[arg+1].SizeT(), maximumBlobSize, LogAppDataAllowed /* content */))
 		case WriteIOVec:
-			output = append(output, iovecs(t, args[arg].Pointer(), int(args[arg+1].Int()), true /* content */, uint64(maximumBlobSize)))
+			output = append(output, iovecs(t, args[arg].Pointer(), int(args[arg+1].Int()), LogAppDataAllowed /* content */, uint64(maximumBlobSize)))
 		case IOVec:
 			output = append(output, iovecs(t, args[arg].Pointer(), int(args[arg+1].Int()), false /* content */, uint64(maximumBlobSize)))
 		case SendMsgHdr:
-			output = append(output, msghdr(t, args[arg].Pointer(), true /* content */, uint64(maximumBlobSize)))
+			output = append(output, msghdr(t, args[arg].Pointer(), LogAppDataAllowed /* content */, uint64(maximumBlobSize)))
 		case RecvMsgHdr:
 			output = append(output, msghdr(t, args[arg].Pointer(), false /* content */, uint64(maximumBlobSize)))
 		case Path:
@@ -488,6 +466,12 @@ func (i *SyscallInfo) pre(t *kernel.Task, args arch.SyscallArguments, maximumBlo
 			output = append(output, epollEvents(t, args[arg].Pointer(), 0 /* numEvents */, uint64(maximumBlobSize)))
 		case SelectFDSet:
 			output = append(output, fdSet(t, int(args[0].Int()), args[arg].Pointer()))
+		case MmapProt:
+			output = append(output, ProtectionFlagSet.Parse(uint64(args[arg].Uint())))
+		case MmapFlags:
+			output = append(output, MmapFlagSet.Parse(uint64(args[arg].Uint())))
+		case CloseRangeFlags:
+			output = append(output, CloseRangeFlagSet.Parse(uint64(args[arg].Uint())))
 		case Oct:
 			output = append(output, "0o"+strconv.FormatUint(args[arg].Uint64(), 8))
 		case Hex:
@@ -510,20 +494,20 @@ func (i *SyscallInfo) post(t *kernel.Task, args arch.SyscallArguments, rval uint
 		}
 		switch i.format[arg] {
 		case ReadBuffer:
-			output[arg] = dump(t, args[arg].Pointer(), uint(rval), maximumBlobSize)
+			output[arg] = dump(t, args[arg].Pointer(), uint(rval), maximumBlobSize, LogAppDataAllowed /* content */)
 		case ReadIOVec:
 			printLength := uint64(rval)
 			if printLength > uint64(maximumBlobSize) {
 				printLength = uint64(maximumBlobSize)
 			}
-			output[arg] = iovecs(t, args[arg].Pointer(), int(args[arg+1].Int()), true /* content */, printLength)
+			output[arg] = iovecs(t, args[arg].Pointer(), int(args[arg+1].Int()), LogAppDataAllowed /* content */, printLength)
 		case WriteIOVec, IOVec, WriteBuffer:
 			// We already have a big blast from write.
 			output[arg] = "..."
 		case SendMsgHdr:
 			output[arg] = msghdr(t, args[arg].Pointer(), false /* content */, uint64(maximumBlobSize))
 		case RecvMsgHdr:
-			output[arg] = msghdr(t, args[arg].Pointer(), true /* content */, uint64(maximumBlobSize))
+			output[arg] = msghdr(t, args[arg].Pointer(), LogAppDataAllowed /* content */, uint64(maximumBlobSize))
 		case PostPath:
 			output[arg] = path(t, args[arg].Pointer())
 		case PipeFDs:
@@ -602,9 +586,9 @@ func (i *SyscallInfo) printExit(t *kernel.Task, elapsed time.Duration, output []
 	if err == nil {
 		// Fill in the output after successful execution.
 		i.post(t, args, retval, output, LogMaximumSize)
-		rval = fmt.Sprintf("%#x (%v)", retval, elapsed)
+		rval = fmt.Sprintf("%d (%#x) (%v)", retval, retval, elapsed)
 	} else {
-		rval = fmt.Sprintf("%#x errno=%d (%s) (%v)", retval, errno, err, elapsed)
+		rval = fmt.Sprintf("%d (%#x) errno=%d (%s) (%v)", retval, retval, errno, err, elapsed)
 	}
 
 	switch len(output) {
@@ -688,7 +672,7 @@ type syscallContext struct {
 
 // SyscallEnter implements kernel.Stracer.SyscallEnter. It logs the syscall
 // entry trace.
-func (s SyscallMap) SyscallEnter(t *kernel.Task, sysno uintptr, args arch.SyscallArguments, flags uint32) interface{} {
+func (s SyscallMap) SyscallEnter(t *kernel.Task, sysno uintptr, args arch.SyscallArguments, flags uint32) any {
 	info, ok := s[sysno]
 	if !ok {
 		info = SyscallInfo{
@@ -717,7 +701,7 @@ func (s SyscallMap) SyscallEnter(t *kernel.Task, sysno uintptr, args arch.Syscal
 
 // SyscallExit implements kernel.Stracer.SyscallExit. It logs the syscall
 // exit trace.
-func (s SyscallMap) SyscallExit(context interface{}, t *kernel.Task, sysno, rval uintptr, err error) {
+func (s SyscallMap) SyscallExit(context any, t *kernel.Task, sysno, rval uintptr, err error) {
 	errno := kernel.ExtractErrno(err, int(sysno))
 	c := context.(*syscallContext)
 
@@ -811,10 +795,10 @@ func convertToSyscallFlag(sinks SinkType) uint32 {
 	return ret
 }
 
-// Enable enables the syscalls in whitelist in all syscall tables.
+// Enable enables the syscalls in allowlist in all syscall tables.
 //
 // Preconditions: Initialize has been called.
-func Enable(whitelist []string, sinks SinkType) error {
+func Enable(allowlist []string, sinks SinkType) error {
 	flags := convertToSyscallFlag(sinks)
 	for _, table := range kernel.SyscallTables() {
 		// Is this known?
@@ -824,7 +808,7 @@ func Enable(whitelist []string, sinks SinkType) error {
 		}
 
 		// Convert to a set of system calls numbers.
-		wl, err := sys.ConvertToSysnoMap(whitelist)
+		wl, err := sys.ConvertToSysnoMap(allowlist)
 		if err != nil {
 			return err
 		}

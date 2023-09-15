@@ -12,28 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build arm64
 // +build arm64
 
 package filter
 
 import (
-	"syscall"
-
+	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/seccomp"
 )
 
 func init() {
-	allowedSyscalls[syscall.SYS_CLONE] = []seccomp.Rule{
+	allowedSyscalls[unix.SYS_CLONE] = []seccomp.Rule{
 		// parent_tidptr and child_tidptr are always 0 because neither
 		// CLONE_PARENT_SETTID nor CLONE_CHILD_SETTID are used.
 		{
 			seccomp.EqualTo(
-				syscall.CLONE_VM |
-					syscall.CLONE_FS |
-					syscall.CLONE_FILES |
-					syscall.CLONE_SIGHAND |
-					syscall.CLONE_SYSVSEM |
-					syscall.CLONE_THREAD),
+				unix.CLONE_VM |
+					unix.CLONE_FS |
+					unix.CLONE_FILES |
+					unix.CLONE_SIGHAND |
+					unix.CLONE_SYSVSEM |
+					unix.CLONE_THREAD),
 			seccomp.MatchAny{}, // newsp
 			// These arguments are left uninitialized by the Go
 			// runtime, so they may be anything (and are unused by
@@ -44,5 +44,5 @@ func init() {
 		},
 	}
 
-	allowedSyscalls[syscall.SYS_FSTATAT] = []seccomp.Rule{}
+	allowedSyscalls[unix.SYS_FSTATAT] = []seccomp.Rule{}
 }

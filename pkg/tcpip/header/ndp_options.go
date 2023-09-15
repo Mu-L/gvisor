@@ -26,29 +26,33 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip"
 )
 
-// NDPOptionIdentifier is an NDP option type identifier.
-type NDPOptionIdentifier uint8
+// ndpOptionIdentifier is an NDP option type identifier.
+type ndpOptionIdentifier uint8
 
 const (
-	// NDPSourceLinkLayerAddressOptionType is the type of the Source Link Layer
+	// ndpSourceLinkLayerAddressOptionType is the type of the Source Link Layer
 	// Address option, as per RFC 4861 section 4.6.1.
-	NDPSourceLinkLayerAddressOptionType NDPOptionIdentifier = 1
+	ndpSourceLinkLayerAddressOptionType ndpOptionIdentifier = 1
 
-	// NDPTargetLinkLayerAddressOptionType is the type of the Target Link Layer
+	// ndpTargetLinkLayerAddressOptionType is the type of the Target Link Layer
 	// Address option, as per RFC 4861 section 4.6.1.
-	NDPTargetLinkLayerAddressOptionType NDPOptionIdentifier = 2
+	ndpTargetLinkLayerAddressOptionType ndpOptionIdentifier = 2
 
-	// NDPPrefixInformationType is the type of the Prefix Information
+	// ndpPrefixInformationType is the type of the Prefix Information
 	// option, as per RFC 4861 section 4.6.2.
-	NDPPrefixInformationType NDPOptionIdentifier = 3
+	ndpPrefixInformationType ndpOptionIdentifier = 3
 
-	// NDPRecursiveDNSServerOptionType is the type of the Recursive DNS
+	// ndpNonceOptionType is the type of the Nonce option, as per
+	// RFC 3971 section 5.3.2.
+	ndpNonceOptionType ndpOptionIdentifier = 14
+
+	// ndpRecursiveDNSServerOptionType is the type of the Recursive DNS
 	// Server option, as per RFC 8106 section 5.1.
-	NDPRecursiveDNSServerOptionType NDPOptionIdentifier = 25
+	ndpRecursiveDNSServerOptionType ndpOptionIdentifier = 25
 
-	// NDPDNSSearchListOptionType is the type of the DNS Search List option,
+	// ndpDNSSearchListOptionType is the type of the DNS Search List option,
 	// as per RFC 8106 section 5.2.
-	NDPDNSSearchListOptionType = 31
+	ndpDNSSearchListOptionType ndpOptionIdentifier = 31
 )
 
 const (
@@ -73,12 +77,12 @@ const (
 
 	// ndpPrefixInformationOnLinkFlagMask is the mask of the On-Link Flag
 	// field in the flags byte within an NDPPrefixInformation.
-	ndpPrefixInformationOnLinkFlagMask = (1 << 7)
+	ndpPrefixInformationOnLinkFlagMask = 1 << 7
 
 	// ndpPrefixInformationAutoAddrConfFlagMask is the mask of the
 	// Autonomous Address-Configuration flag field in the flags byte within
 	// an NDPPrefixInformation.
-	ndpPrefixInformationAutoAddrConfFlagMask = (1 << 6)
+	ndpPrefixInformationAutoAddrConfFlagMask = 1 << 6
 
 	// ndpPrefixInformationReserved1FlagsMask is the mask of the Reserved1
 	// field in the flags byte within an NDPPrefixInformation.
@@ -144,15 +148,10 @@ const (
 	// NDP option. That is, the length field for NDP options is in units of
 	// 8 octets, as per RFC 4861 section 4.6.
 	lengthByteUnits = 8
-)
 
-var (
 	// NDPInfiniteLifetime is a value that represents infinity for the
 	// 4-byte lifetime fields found in various NDP options. Its value is
 	// (2^32 - 1)s = 4294967295s.
-	//
-	// This is a variable instead of a constant so that tests can change
-	// this value to a smaller value. It should only be modified by tests.
 	NDPInfiniteLifetime = time.Second * math.MaxUint32
 )
 
@@ -198,7 +197,7 @@ func (i *NDPOptionIterator) Next() (NDPOption, bool, error) {
 			// bytes for the whole option.
 			return nil, true, fmt.Errorf("unexpectedly exhausted buffer when reading the option's Type field: %w", io.ErrUnexpectedEOF)
 		}
-		kind := NDPOptionIdentifier(temp)
+		kind := ndpOptionIdentifier(temp)
 
 		// Get the Length field.
 		length, err := i.opts.ReadByte()
@@ -225,13 +224,27 @@ func (i *NDPOptionIterator) Next() (NDPOption, bool, error) {
 		}
 
 		switch kind {
-		case NDPSourceLinkLayerAddressOptionType:
+		case ndpSourceLinkLayerAddressOptionType:
 			return NDPSourceLinkLayerAddressOption(body), false, nil
 
-		case NDPTargetLinkLayerAddressOptionType:
+		case ndpTargetLinkLayerAddressOptionType:
 			return NDPTargetLinkLayerAddressOption(body), false, nil
 
-		case NDPPrefixInformationType:
+		case ndpNonceOptionType:
+			return NDPNonceOption(body), false, nil
+
+		case ndpRouteInformationType:
+			if numBodyBytes > ndpRouteInformationMaxLength {
+				return nil, true, fmt.Errorf("got %d bytes for NDP Route Information option's body, expected at max %d bytes: %w", numBodyBytes, ndpRouteInformationMaxLength, ErrNDPOptMalformedBody)
+			}
+			opt := NDPRouteInformation(body)
+			if err := opt.hasError(); err != nil {
+				return nil, true, err
+			}
+
+			return opt, false, nil
+
+		case ndpPrefixInformationType:
 			// Make sure the length of a Prefix Information option
 			// body is ndpPrefixInformationLength, as per RFC 4861
 			// section 4.6.2.
@@ -241,7 +254,7 @@ func (i *NDPOptionIterator) Next() (NDPOption, bool, error) {
 
 			return NDPPrefixInformation(body), false, nil
 
-		case NDPRecursiveDNSServerOptionType:
+		case ndpRecursiveDNSServerOptionType:
 			opt := NDPRecursiveDNSServer(body)
 			if err := opt.checkAddresses(); err != nil {
 				return nil, true, err
@@ -249,7 +262,7 @@ func (i *NDPOptionIterator) Next() (NDPOption, bool, error) {
 
 			return opt, false, nil
 
-		case NDPDNSSearchListOptionType:
+		case ndpDNSSearchListOptionType:
 			opt := NDPDNSSearchList(body)
 			if err := opt.checkDomainNames(); err != nil {
 				return nil, true, err
@@ -316,7 +329,7 @@ func (b NDPOptions) Serialize(s NDPOptionsSerializer) int {
 			continue
 		}
 
-		b[0] = byte(o.Type())
+		b[0] = byte(o.kind())
 
 		// We know this safe because paddedLength would have returned
 		// 0 if o had an invalid length (> 255 * lengthByteUnits).
@@ -341,11 +354,11 @@ func (b NDPOptions) Serialize(s NDPOptionsSerializer) int {
 type NDPOption interface {
 	fmt.Stringer
 
-	// Type returns the type of the receiver.
-	Type() NDPOptionIdentifier
+	// kind returns the type of the receiver.
+	kind() ndpOptionIdentifier
 
-	// Length returns the length of the body of the receiver, in bytes.
-	Length() int
+	// length returns the length of the body of the receiver, in bytes.
+	length() int
 
 	// serializeInto serializes the receiver into the provided byte
 	// buffer.
@@ -365,7 +378,7 @@ type NDPOption interface {
 // paddedLength returns the length of o, in bytes, with any padding bytes, if
 // required.
 func paddedLength(o NDPOption) int {
-	l := o.Length()
+	l := o.length()
 
 	if l == 0 {
 		return 0
@@ -416,6 +429,37 @@ func (b NDPOptionsSerializer) Length() int {
 	return l
 }
 
+// NDPNonceOption is the NDP Nonce Option as defined by RFC 3971 section 5.3.2.
+//
+// It is the first X bytes following the NDP option's Type and Length field
+// where X is the value in Length multiplied by lengthByteUnits - 2 bytes.
+type NDPNonceOption []byte
+
+// kind implements NDPOption.
+func (o NDPNonceOption) kind() ndpOptionIdentifier {
+	return ndpNonceOptionType
+}
+
+// length implements NDPOption.
+func (o NDPNonceOption) length() int {
+	return len(o)
+}
+
+// serializeInto implements NDPOption.
+func (o NDPNonceOption) serializeInto(b []byte) int {
+	return copy(b, o)
+}
+
+// String implements fmt.Stringer.
+func (o NDPNonceOption) String() string {
+	return fmt.Sprintf("%T(%x)", o, []byte(o))
+}
+
+// Nonce returns the nonce value this option holds.
+func (o NDPNonceOption) Nonce() []byte {
+	return o
+}
+
 // NDPSourceLinkLayerAddressOption is the NDP Source Link Layer Option
 // as defined by RFC 4861 section 4.6.1.
 //
@@ -423,22 +467,22 @@ func (b NDPOptionsSerializer) Length() int {
 // where X is the value in Length multiplied by lengthByteUnits - 2 bytes.
 type NDPSourceLinkLayerAddressOption tcpip.LinkAddress
 
-// Type implements NDPOption.Type.
-func (o NDPSourceLinkLayerAddressOption) Type() NDPOptionIdentifier {
-	return NDPSourceLinkLayerAddressOptionType
+// kind implements NDPOption.
+func (o NDPSourceLinkLayerAddressOption) kind() ndpOptionIdentifier {
+	return ndpSourceLinkLayerAddressOptionType
 }
 
-// Length implements NDPOption.Length.
-func (o NDPSourceLinkLayerAddressOption) Length() int {
+// length implements NDPOption.
+func (o NDPSourceLinkLayerAddressOption) length() int {
 	return len(o)
 }
 
-// serializeInto implements NDPOption.serializeInto.
+// serializeInto implements NDPOption.
 func (o NDPSourceLinkLayerAddressOption) serializeInto(b []byte) int {
 	return copy(b, o)
 }
 
-// String implements fmt.Stringer.String.
+// String implements fmt.Stringer.
 func (o NDPSourceLinkLayerAddressOption) String() string {
 	return fmt.Sprintf("%T(%s)", o, tcpip.LinkAddress(o))
 }
@@ -463,22 +507,22 @@ func (o NDPSourceLinkLayerAddressOption) EthernetAddress() tcpip.LinkAddress {
 // where X is the value in Length multiplied by lengthByteUnits - 2 bytes.
 type NDPTargetLinkLayerAddressOption tcpip.LinkAddress
 
-// Type implements NDPOption.Type.
-func (o NDPTargetLinkLayerAddressOption) Type() NDPOptionIdentifier {
-	return NDPTargetLinkLayerAddressOptionType
+// kind implements NDPOption.
+func (o NDPTargetLinkLayerAddressOption) kind() ndpOptionIdentifier {
+	return ndpTargetLinkLayerAddressOptionType
 }
 
-// Length implements NDPOption.Length.
-func (o NDPTargetLinkLayerAddressOption) Length() int {
+// length implements NDPOption.
+func (o NDPTargetLinkLayerAddressOption) length() int {
 	return len(o)
 }
 
-// serializeInto implements NDPOption.serializeInto.
+// serializeInto implements NDPOption.
 func (o NDPTargetLinkLayerAddressOption) serializeInto(b []byte) int {
 	return copy(b, o)
 }
 
-// String implements fmt.Stringer.String.
+// String implements fmt.Stringer.
 func (o NDPTargetLinkLayerAddressOption) String() string {
 	return fmt.Sprintf("%T(%s)", o, tcpip.LinkAddress(o))
 }
@@ -503,17 +547,17 @@ func (o NDPTargetLinkLayerAddressOption) EthernetAddress() tcpip.LinkAddress {
 // ndpPrefixInformationLength bytes.
 type NDPPrefixInformation []byte
 
-// Type implements NDPOption.Type.
-func (o NDPPrefixInformation) Type() NDPOptionIdentifier {
-	return NDPPrefixInformationType
+// kind implements NDPOption.
+func (o NDPPrefixInformation) kind() ndpOptionIdentifier {
+	return ndpPrefixInformationType
 }
 
-// Length implements NDPOption.Length.
-func (o NDPPrefixInformation) Length() int {
+// length implements NDPOption.
+func (o NDPPrefixInformation) length() int {
 	return ndpPrefixInformationLength
 }
 
-// serializeInto implements NDPOption.serializeInto.
+// serializeInto implements NDPOption.
 func (o NDPPrefixInformation) serializeInto(b []byte) int {
 	used := copy(b, o)
 
@@ -529,7 +573,7 @@ func (o NDPPrefixInformation) serializeInto(b []byte) int {
 	return used
 }
 
-// String implements fmt.Stringer.String.
+// String implements fmt.Stringer.
 func (o NDPPrefixInformation) String() string {
 	return fmt.Sprintf("%T(O=%t, A=%t, PL=%s, VL=%s, Prefix=%s)",
 		o,
@@ -603,7 +647,7 @@ func (o NDPPrefixInformation) PreferredLifetime() time.Duration {
 // Hosts SHOULD ignore an NDP Prefix Information option where the Prefix field
 // holds the link-local prefix (fe80::).
 func (o NDPPrefixInformation) Prefix() tcpip.Address {
-	return tcpip.Address(o[ndpPrefixInformationPrefixOffset:][:IPv6AddressSize])
+	return tcpip.AddrFrom16Slice(o[ndpPrefixInformationPrefixOffset:][:IPv6AddressSize])
 }
 
 // Subnet returns the Prefix field and Prefix Length field represented in a
@@ -622,22 +666,23 @@ func (o NDPPrefixInformation) Subnet() tcpip.Subnet {
 // To make sure that the option meets its minimum length and does not end in the
 // middle of a DNS server's IPv6 address, the length of a valid
 // NDPRecursiveDNSServer must meet the following constraint:
-//   (Length - ndpRecursiveDNSServerAddressesOffset) % IPv6AddressSize == 0
+//
+//	(Length - ndpRecursiveDNSServerAddressesOffset) % IPv6AddressSize == 0
 type NDPRecursiveDNSServer []byte
 
 // Type returns the type of an NDP Recursive DNS Server option.
 //
-// Type implements NDPOption.Type.
-func (NDPRecursiveDNSServer) Type() NDPOptionIdentifier {
-	return NDPRecursiveDNSServerOptionType
+// kind implements NDPOption.
+func (NDPRecursiveDNSServer) kind() ndpOptionIdentifier {
+	return ndpRecursiveDNSServerOptionType
 }
 
-// Length implements NDPOption.Length.
-func (o NDPRecursiveDNSServer) Length() int {
+// length implements NDPOption.
+func (o NDPRecursiveDNSServer) length() int {
 	return len(o)
 }
 
-// serializeInto implements NDPOption.serializeInto.
+// serializeInto implements NDPOption.
 func (o NDPRecursiveDNSServer) serializeInto(b []byte) int {
 	used := copy(b, o)
 
@@ -649,7 +694,7 @@ func (o NDPRecursiveDNSServer) serializeInto(b []byte) int {
 	return used
 }
 
-// String implements fmt.Stringer.String.
+// String implements fmt.Stringer.
 func (o NDPRecursiveDNSServer) String() string {
 	lt := o.Lifetime()
 	addrs, err := o.Addresses()
@@ -703,7 +748,7 @@ func (o NDPRecursiveDNSServer) iterAddresses(fn func(tcpip.Address)) error {
 	}
 
 	for i := 0; len(o) != 0; i++ {
-		addr := tcpip.Address(o[:IPv6AddressSize])
+		addr := tcpip.AddrFrom16Slice(o[:IPv6AddressSize])
 		if !IsV6UnicastAddress(addr) {
 			return fmt.Errorf("%d-th address (%s) in NDP Recursive DNS Server option is not a valid unicast IPv6 address: %w", i, addr, ErrNDPOptMalformedBody)
 		}
@@ -722,17 +767,17 @@ func (o NDPRecursiveDNSServer) iterAddresses(fn func(tcpip.Address)) error {
 // RFC 8106 section 5.2.
 type NDPDNSSearchList []byte
 
-// Type implements NDPOption.Type.
-func (o NDPDNSSearchList) Type() NDPOptionIdentifier {
-	return NDPDNSSearchListOptionType
+// kind implements NDPOption.
+func (o NDPDNSSearchList) kind() ndpOptionIdentifier {
+	return ndpDNSSearchListOptionType
 }
 
-// Length implements NDPOption.Length.
-func (o NDPDNSSearchList) Length() int {
+// length implements NDPOption.
+func (o NDPDNSSearchList) length() int {
 	return len(o)
 }
 
-// serializeInto implements NDPOption.serializeInto.
+// serializeInto implements NDPOption.
 func (o NDPDNSSearchList) serializeInto(b []byte) int {
 	used := copy(b, o)
 
@@ -744,7 +789,7 @@ func (o NDPDNSSearchList) serializeInto(b []byte) int {
 	return used
 }
 
-// String implements fmt.Stringer.String.
+// String implements fmt.Stringer.
 func (o NDPDNSSearchList) String() string {
 	lt := o.Lifetime()
 	domainNames, err := o.DomainNames()
@@ -896,4 +941,138 @@ func isUpperLetter(b byte) bool {
 
 func isDigit(b byte) bool {
 	return b >= '0' && b <= '9'
+}
+
+// As per RFC 4191 section 2.3,
+//
+//	2.3.  Route Information Option
+//
+//	    0                   1                   2                   3
+//	     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+//	    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//	    |     Type      |    Length     | Prefix Length |Resvd|Prf|Resvd|
+//	    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//	    |                        Route Lifetime                         |
+//	    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//	    |                   Prefix (Variable Length)                    |
+//	    .                                                               .
+//	    .                                                               .
+//	    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//
+//	 Fields:
+//
+//	 Type        24
+//
+//
+//	 Length      8-bit unsigned integer.  The length of the option
+//	             (including the Type and Length fields) in units of 8
+//	             octets.  The Length field is 1, 2, or 3 depending on the
+//	             Prefix Length.  If Prefix Length is greater than 64, then
+//	             Length must be 3.  If Prefix Length is greater than 0,
+//	             then Length must be 2 or 3.  If Prefix Length is zero,
+//	             then Length must be 1, 2, or 3.
+const (
+	ndpRouteInformationType      = ndpOptionIdentifier(24)
+	ndpRouteInformationMaxLength = 22
+
+	ndpRouteInformationPrefixLengthIdx  = 0
+	ndpRouteInformationFlagsIdx         = 1
+	ndpRouteInformationPrfShift         = 3
+	ndpRouteInformationPrfMask          = 3 << ndpRouteInformationPrfShift
+	ndpRouteInformationRouteLifetimeIdx = 2
+	ndpRouteInformationRoutePrefixIdx   = 6
+)
+
+// NDPRouteInformation is the NDP Router Information option, as defined by
+// RFC 4191 section 2.3.
+type NDPRouteInformation []byte
+
+func (NDPRouteInformation) kind() ndpOptionIdentifier {
+	return ndpRouteInformationType
+}
+
+func (o NDPRouteInformation) length() int {
+	return len(o)
+}
+
+func (o NDPRouteInformation) serializeInto(b []byte) int {
+	return copy(b, o)
+}
+
+// String implements fmt.Stringer.
+func (o NDPRouteInformation) String() string {
+	return fmt.Sprintf("%T", o)
+}
+
+// PrefixLength returns the length of the prefix.
+func (o NDPRouteInformation) PrefixLength() uint8 {
+	return o[ndpRouteInformationPrefixLengthIdx]
+}
+
+// RoutePreference returns the preference of the route over other routes to the
+// same destination but through a different router.
+func (o NDPRouteInformation) RoutePreference() NDPRoutePreference {
+	return NDPRoutePreference((o[ndpRouteInformationFlagsIdx] & ndpRouteInformationPrfMask) >> ndpRouteInformationPrfShift)
+}
+
+// RouteLifetime returns the lifetime of the route.
+//
+// Note, a value of 0 implies the route is now invalid and a value of
+// infinity/forever is represented by NDPInfiniteLifetime.
+func (o NDPRouteInformation) RouteLifetime() time.Duration {
+	return time.Second * time.Duration(binary.BigEndian.Uint32(o[ndpRouteInformationRouteLifetimeIdx:]))
+}
+
+// Prefix returns the prefix of the destination subnet this route is for.
+func (o NDPRouteInformation) Prefix() (tcpip.Subnet, error) {
+	prefixLength := int(o.PrefixLength())
+	if max := IPv6AddressSize * 8; prefixLength > max {
+		return tcpip.Subnet{}, fmt.Errorf("got prefix length = %d, want <= %d", prefixLength, max)
+	}
+
+	prefix := o[ndpRouteInformationRoutePrefixIdx:]
+	var addrBytes [IPv6AddressSize]byte
+	if n := copy(addrBytes[:], prefix); n != len(prefix) {
+		panic(fmt.Sprintf("got copy(addrBytes, prefix) = %d, want = %d", n, len(prefix)))
+	}
+
+	return tcpip.AddressWithPrefix{
+		Address:   tcpip.AddrFrom16(addrBytes),
+		PrefixLen: prefixLength,
+	}.Subnet(), nil
+}
+
+func (o NDPRouteInformation) hasError() error {
+	l := len(o)
+	if l < ndpRouteInformationRoutePrefixIdx {
+		return fmt.Errorf("%T too small, got = %d bytes: %w", o, l, ErrNDPOptMalformedBody)
+	}
+
+	prefixLength := int(o.PrefixLength())
+	if max := IPv6AddressSize * 8; prefixLength > max {
+		return fmt.Errorf("got prefix length = %d, want <= %d: %w", prefixLength, max, ErrNDPOptMalformedBody)
+	}
+
+	//   Length      8-bit unsigned integer.  The length of the option
+	//               (including the Type and Length fields) in units of 8
+	//               octets.  The Length field is 1, 2, or 3 depending on the
+	//               Prefix Length.  If Prefix Length is greater than 64, then
+	//               Length must be 3.  If Prefix Length is greater than 0,
+	//               then Length must be 2 or 3.  If Prefix Length is zero,
+	//               then Length must be 1, 2, or 3.
+	l += 2 // Add 2 bytes for the type and length bytes.
+	lengthField := l / lengthByteUnits
+	if prefixLength > 64 {
+		if lengthField != 3 {
+			return fmt.Errorf("Length field must be 3 when Prefix Length (%d) is > 64 (got = %d): %w", prefixLength, lengthField, ErrNDPOptMalformedBody)
+		}
+	} else if prefixLength > 0 {
+		if lengthField != 2 && lengthField != 3 {
+			return fmt.Errorf("Length field must be 2 or 3 when Prefix Length (%d) is between 0 and 64 (got = %d): %w", prefixLength, lengthField, ErrNDPOptMalformedBody)
+		}
+	} else if lengthField == 0 || lengthField > 3 {
+		return fmt.Errorf("Length field must be 1, 2, or 3 when Prefix Length is zero (got = %d): %w", lengthField, ErrNDPOptMalformedBody)
+	}
+
+	return nil
 }

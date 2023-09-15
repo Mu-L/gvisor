@@ -21,6 +21,7 @@ func (i *IOEvent) StateFields() []string {
 
 func (i *IOEvent) beforeSave() {}
 
+// +checklocksignore
 func (i *IOEvent) StateSave(stateSinkObject state.Sink) {
 	i.beforeSave()
 	stateSinkObject.Save(0, &i.Data)
@@ -31,6 +32,7 @@ func (i *IOEvent) StateSave(stateSinkObject state.Sink) {
 
 func (i *IOEvent) afterLoad() {}
 
+// +checklocksignore
 func (i *IOEvent) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &i.Data)
 	stateSourceObject.Load(1, &i.Obj)
@@ -53,6 +55,7 @@ func (b *BPFInstruction) StateFields() []string {
 
 func (b *BPFInstruction) beforeSave() {}
 
+// +checklocksignore
 func (b *BPFInstruction) StateSave(stateSinkObject state.Sink) {
 	b.beforeSave()
 	stateSinkObject.Save(0, &b.OpCode)
@@ -63,11 +66,283 @@ func (b *BPFInstruction) StateSave(stateSinkObject state.Sink) {
 
 func (b *BPFInstruction) afterLoad() {}
 
+// +checklocksignore
 func (b *BPFInstruction) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &b.OpCode)
 	stateSourceObject.Load(1, &b.JumpIfTrue)
 	stateSourceObject.Load(2, &b.JumpIfFalse)
 	stateSourceObject.Load(3, &b.K)
+}
+
+func (i *IOUringCqe) StateTypeName() string {
+	return "pkg/abi/linux.IOUringCqe"
+}
+
+func (i *IOUringCqe) StateFields() []string {
+	return []string{
+		"UserData",
+		"Res",
+		"Flags",
+	}
+}
+
+func (i *IOUringCqe) beforeSave() {}
+
+// +checklocksignore
+func (i *IOUringCqe) StateSave(stateSinkObject state.Sink) {
+	i.beforeSave()
+	stateSinkObject.Save(0, &i.UserData)
+	stateSinkObject.Save(1, &i.Res)
+	stateSinkObject.Save(2, &i.Flags)
+}
+
+func (i *IOUringCqe) afterLoad() {}
+
+// +checklocksignore
+func (i *IOUringCqe) StateLoad(stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &i.UserData)
+	stateSourceObject.Load(1, &i.Res)
+	stateSourceObject.Load(2, &i.Flags)
+}
+
+func (i *IOUring) StateTypeName() string {
+	return "pkg/abi/linux.IOUring"
+}
+
+func (i *IOUring) StateFields() []string {
+	return []string{
+		"Head",
+		"Tail",
+	}
+}
+
+func (i *IOUring) beforeSave() {}
+
+// +checklocksignore
+func (i *IOUring) StateSave(stateSinkObject state.Sink) {
+	i.beforeSave()
+	stateSinkObject.Save(0, &i.Head)
+	stateSinkObject.Save(1, &i.Tail)
+}
+
+func (i *IOUring) afterLoad() {}
+
+// +checklocksignore
+func (i *IOUring) StateLoad(stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &i.Head)
+	stateSourceObject.Load(1, &i.Tail)
+}
+
+func (i *IORings) StateTypeName() string {
+	return "pkg/abi/linux.IORings"
+}
+
+func (i *IORings) StateFields() []string {
+	return []string{
+		"Sq",
+		"Cq",
+		"SqRingMask",
+		"CqRingMask",
+		"SqRingEntries",
+		"CqRingEntries",
+		"sqDropped",
+		"sqFlags",
+		"cqFlags",
+		"CqOverflow",
+	}
+}
+
+func (i *IORings) beforeSave() {}
+
+// +checklocksignore
+func (i *IORings) StateSave(stateSinkObject state.Sink) {
+	i.beforeSave()
+	stateSinkObject.Save(0, &i.Sq)
+	stateSinkObject.Save(1, &i.Cq)
+	stateSinkObject.Save(2, &i.SqRingMask)
+	stateSinkObject.Save(3, &i.CqRingMask)
+	stateSinkObject.Save(4, &i.SqRingEntries)
+	stateSinkObject.Save(5, &i.CqRingEntries)
+	stateSinkObject.Save(6, &i.sqDropped)
+	stateSinkObject.Save(7, &i.sqFlags)
+	stateSinkObject.Save(8, &i.cqFlags)
+	stateSinkObject.Save(9, &i.CqOverflow)
+}
+
+func (i *IORings) afterLoad() {}
+
+// +checklocksignore
+func (i *IORings) StateLoad(stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &i.Sq)
+	stateSourceObject.Load(1, &i.Cq)
+	stateSourceObject.Load(2, &i.SqRingMask)
+	stateSourceObject.Load(3, &i.CqRingMask)
+	stateSourceObject.Load(4, &i.SqRingEntries)
+	stateSourceObject.Load(5, &i.CqRingEntries)
+	stateSourceObject.Load(6, &i.sqDropped)
+	stateSourceObject.Load(7, &i.sqFlags)
+	stateSourceObject.Load(8, &i.cqFlags)
+	stateSourceObject.Load(9, &i.CqOverflow)
+}
+
+func (i *IOUringSqe) StateTypeName() string {
+	return "pkg/abi/linux.IOUringSqe"
+}
+
+func (i *IOUringSqe) StateFields() []string {
+	return []string{
+		"Opcode",
+		"Flags",
+		"IoPrio",
+		"Fd",
+		"OffOrAddrOrCmdOp",
+		"AddrOrSpliceOff",
+		"Len",
+		"specialFlags",
+		"UserData",
+		"BufIndexOrGroup",
+		"personality",
+		"spliceFDOrFileIndex",
+		"addr3",
+	}
+}
+
+func (i *IOUringSqe) beforeSave() {}
+
+// +checklocksignore
+func (i *IOUringSqe) StateSave(stateSinkObject state.Sink) {
+	i.beforeSave()
+	stateSinkObject.Save(0, &i.Opcode)
+	stateSinkObject.Save(1, &i.Flags)
+	stateSinkObject.Save(2, &i.IoPrio)
+	stateSinkObject.Save(3, &i.Fd)
+	stateSinkObject.Save(4, &i.OffOrAddrOrCmdOp)
+	stateSinkObject.Save(5, &i.AddrOrSpliceOff)
+	stateSinkObject.Save(6, &i.Len)
+	stateSinkObject.Save(7, &i.specialFlags)
+	stateSinkObject.Save(8, &i.UserData)
+	stateSinkObject.Save(9, &i.BufIndexOrGroup)
+	stateSinkObject.Save(10, &i.personality)
+	stateSinkObject.Save(11, &i.spliceFDOrFileIndex)
+	stateSinkObject.Save(12, &i.addr3)
+}
+
+func (i *IOUringSqe) afterLoad() {}
+
+// +checklocksignore
+func (i *IOUringSqe) StateLoad(stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &i.Opcode)
+	stateSourceObject.Load(1, &i.Flags)
+	stateSourceObject.Load(2, &i.IoPrio)
+	stateSourceObject.Load(3, &i.Fd)
+	stateSourceObject.Load(4, &i.OffOrAddrOrCmdOp)
+	stateSourceObject.Load(5, &i.AddrOrSpliceOff)
+	stateSourceObject.Load(6, &i.Len)
+	stateSourceObject.Load(7, &i.specialFlags)
+	stateSourceObject.Load(8, &i.UserData)
+	stateSourceObject.Load(9, &i.BufIndexOrGroup)
+	stateSourceObject.Load(10, &i.personality)
+	stateSourceObject.Load(11, &i.spliceFDOrFileIndex)
+	stateSourceObject.Load(12, &i.addr3)
+}
+
+func (s *SigAction) StateTypeName() string {
+	return "pkg/abi/linux.SigAction"
+}
+
+func (s *SigAction) StateFields() []string {
+	return []string{
+		"Handler",
+		"Flags",
+		"Restorer",
+		"Mask",
+	}
+}
+
+func (s *SigAction) beforeSave() {}
+
+// +checklocksignore
+func (s *SigAction) StateSave(stateSinkObject state.Sink) {
+	s.beforeSave()
+	stateSinkObject.Save(0, &s.Handler)
+	stateSinkObject.Save(1, &s.Flags)
+	stateSinkObject.Save(2, &s.Restorer)
+	stateSinkObject.Save(3, &s.Mask)
+}
+
+func (s *SigAction) afterLoad() {}
+
+// +checklocksignore
+func (s *SigAction) StateLoad(stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &s.Handler)
+	stateSourceObject.Load(1, &s.Flags)
+	stateSourceObject.Load(2, &s.Restorer)
+	stateSourceObject.Load(3, &s.Mask)
+}
+
+func (s *SignalStack) StateTypeName() string {
+	return "pkg/abi/linux.SignalStack"
+}
+
+func (s *SignalStack) StateFields() []string {
+	return []string{
+		"Addr",
+		"Flags",
+		"Size",
+	}
+}
+
+func (s *SignalStack) beforeSave() {}
+
+// +checklocksignore
+func (s *SignalStack) StateSave(stateSinkObject state.Sink) {
+	s.beforeSave()
+	stateSinkObject.Save(0, &s.Addr)
+	stateSinkObject.Save(1, &s.Flags)
+	stateSinkObject.Save(2, &s.Size)
+}
+
+func (s *SignalStack) afterLoad() {}
+
+// +checklocksignore
+func (s *SignalStack) StateLoad(stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &s.Addr)
+	stateSourceObject.Load(1, &s.Flags)
+	stateSourceObject.Load(2, &s.Size)
+}
+
+func (s *SignalInfo) StateTypeName() string {
+	return "pkg/abi/linux.SignalInfo"
+}
+
+func (s *SignalInfo) StateFields() []string {
+	return []string{
+		"Signo",
+		"Errno",
+		"Code",
+		"Fields",
+	}
+}
+
+func (s *SignalInfo) beforeSave() {}
+
+// +checklocksignore
+func (s *SignalInfo) StateSave(stateSinkObject state.Sink) {
+	s.beforeSave()
+	stateSinkObject.Save(0, &s.Signo)
+	stateSinkObject.Save(1, &s.Errno)
+	stateSinkObject.Save(2, &s.Code)
+	stateSinkObject.Save(3, &s.Fields)
+}
+
+func (s *SignalInfo) afterLoad() {}
+
+// +checklocksignore
+func (s *SignalInfo) StateLoad(stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &s.Signo)
+	stateSourceObject.Load(1, &s.Errno)
+	stateSourceObject.Load(2, &s.Code)
+	stateSourceObject.Load(3, &s.Fields)
 }
 
 func (c *ControlMessageIPPacketInfo) StateTypeName() string {
@@ -84,6 +359,7 @@ func (c *ControlMessageIPPacketInfo) StateFields() []string {
 
 func (c *ControlMessageIPPacketInfo) beforeSave() {}
 
+// +checklocksignore
 func (c *ControlMessageIPPacketInfo) StateSave(stateSinkObject state.Sink) {
 	c.beforeSave()
 	stateSinkObject.Save(0, &c.NIC)
@@ -93,10 +369,64 @@ func (c *ControlMessageIPPacketInfo) StateSave(stateSinkObject state.Sink) {
 
 func (c *ControlMessageIPPacketInfo) afterLoad() {}
 
+// +checklocksignore
 func (c *ControlMessageIPPacketInfo) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &c.NIC)
 	stateSourceObject.Load(1, &c.LocalAddr)
 	stateSourceObject.Load(2, &c.DestinationAddr)
+}
+
+func (c *ControlMessageIPv6PacketInfo) StateTypeName() string {
+	return "pkg/abi/linux.ControlMessageIPv6PacketInfo"
+}
+
+func (c *ControlMessageIPv6PacketInfo) StateFields() []string {
+	return []string{
+		"Addr",
+		"NIC",
+	}
+}
+
+func (c *ControlMessageIPv6PacketInfo) beforeSave() {}
+
+// +checklocksignore
+func (c *ControlMessageIPv6PacketInfo) StateSave(stateSinkObject state.Sink) {
+	c.beforeSave()
+	stateSinkObject.Save(0, &c.Addr)
+	stateSinkObject.Save(1, &c.NIC)
+}
+
+func (c *ControlMessageIPv6PacketInfo) afterLoad() {}
+
+// +checklocksignore
+func (c *ControlMessageIPv6PacketInfo) StateLoad(stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &c.Addr)
+	stateSourceObject.Load(1, &c.NIC)
+}
+
+func (i *ICMP6Filter) StateTypeName() string {
+	return "pkg/abi/linux.ICMP6Filter"
+}
+
+func (i *ICMP6Filter) StateFields() []string {
+	return []string{
+		"Filter",
+	}
+}
+
+func (i *ICMP6Filter) beforeSave() {}
+
+// +checklocksignore
+func (i *ICMP6Filter) StateSave(stateSinkObject state.Sink) {
+	i.beforeSave()
+	stateSinkObject.Save(0, &i.Filter)
+}
+
+func (i *ICMP6Filter) afterLoad() {}
+
+// +checklocksignore
+func (i *ICMP6Filter) StateLoad(stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &i.Filter)
 }
 
 func (t *KernelTermios) StateTypeName() string {
@@ -118,6 +448,7 @@ func (t *KernelTermios) StateFields() []string {
 
 func (t *KernelTermios) beforeSave() {}
 
+// +checklocksignore
 func (t *KernelTermios) StateSave(stateSinkObject state.Sink) {
 	t.beforeSave()
 	stateSinkObject.Save(0, &t.InputFlags)
@@ -132,6 +463,7 @@ func (t *KernelTermios) StateSave(stateSinkObject state.Sink) {
 
 func (t *KernelTermios) afterLoad() {}
 
+// +checklocksignore
 func (t *KernelTermios) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &t.InputFlags)
 	stateSourceObject.Load(1, &t.OutputFlags)
@@ -156,6 +488,7 @@ func (w *WindowSize) StateFields() []string {
 
 func (w *WindowSize) beforeSave() {}
 
+// +checklocksignore
 func (w *WindowSize) StateSave(stateSinkObject state.Sink) {
 	w.beforeSave()
 	stateSinkObject.Save(0, &w.Rows)
@@ -164,6 +497,7 @@ func (w *WindowSize) StateSave(stateSinkObject state.Sink) {
 
 func (w *WindowSize) afterLoad() {}
 
+// +checklocksignore
 func (w *WindowSize) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &w.Rows)
 	stateSourceObject.Load(1, &w.Cols)
@@ -172,7 +506,16 @@ func (w *WindowSize) StateLoad(stateSourceObject state.Source) {
 func init() {
 	state.Register((*IOEvent)(nil))
 	state.Register((*BPFInstruction)(nil))
+	state.Register((*IOUringCqe)(nil))
+	state.Register((*IOUring)(nil))
+	state.Register((*IORings)(nil))
+	state.Register((*IOUringSqe)(nil))
+	state.Register((*SigAction)(nil))
+	state.Register((*SignalStack)(nil))
+	state.Register((*SignalInfo)(nil))
 	state.Register((*ControlMessageIPPacketInfo)(nil))
+	state.Register((*ControlMessageIPv6PacketInfo)(nil))
+	state.Register((*ICMP6Filter)(nil))
 	state.Register((*KernelTermios)(nil))
 	state.Register((*WindowSize)(nil))
 }

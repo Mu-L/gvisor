@@ -12,26 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build arm64
 // +build arm64
 
 package ptrace
 
 import (
-	"syscall"
 	"unsafe"
 
+	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/abi/linux"
 )
 
 // getTLS gets the thread local storage register.
 func (t *thread) getTLS(tls *uint64) error {
-	iovec := syscall.Iovec{
+	iovec := unix.Iovec{
 		Base: (*byte)(unsafe.Pointer(tls)),
 		Len:  uint64(unsafe.Sizeof(*tls)),
 	}
-	_, _, errno := syscall.RawSyscall6(
-		syscall.SYS_PTRACE,
-		syscall.PTRACE_GETREGSET,
+	_, _, errno := unix.RawSyscall6(
+		unix.SYS_PTRACE,
+		unix.PTRACE_GETREGSET,
 		uintptr(t.tid),
 		linux.NT_ARM_TLS,
 		uintptr(unsafe.Pointer(&iovec)),
@@ -44,13 +45,13 @@ func (t *thread) getTLS(tls *uint64) error {
 
 // setTLS sets the thread local storage register.
 func (t *thread) setTLS(tls *uint64) error {
-	iovec := syscall.Iovec{
+	iovec := unix.Iovec{
 		Base: (*byte)(unsafe.Pointer(tls)),
 		Len:  uint64(unsafe.Sizeof(*tls)),
 	}
-	_, _, errno := syscall.RawSyscall6(
-		syscall.SYS_PTRACE,
-		syscall.PTRACE_SETREGSET,
+	_, _, errno := unix.RawSyscall6(
+		unix.SYS_PTRACE,
+		unix.PTRACE_SETREGSET,
 		uintptr(t.tid),
 		linux.NT_ARM_TLS,
 		uintptr(unsafe.Pointer(&iovec)),

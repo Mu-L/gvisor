@@ -20,11 +20,11 @@ import (
 
 	"gvisor.dev/gvisor/pkg/abi/linux"
 	"gvisor.dev/gvisor/pkg/context"
+	"gvisor.dev/gvisor/pkg/errors/linuxerr"
 	"gvisor.dev/gvisor/pkg/fspath"
 	"gvisor.dev/gvisor/pkg/sentry/fsimpl/kernfs"
 	"gvisor.dev/gvisor/pkg/sentry/kernel/auth"
 	"gvisor.dev/gvisor/pkg/sentry/vfs"
-	"gvisor.dev/gvisor/pkg/syserror"
 )
 
 // filesystemType implements vfs.FilesystemType.
@@ -85,19 +85,26 @@ func (fs *filesystem) PrependPath(ctx context.Context, vfsroot, vd vfs.VirtualDe
 	return vfs.PrependPathSyntheticError{}
 }
 
+// MountOptions implements vfs.FilesystemImpl.MountOptions.
+func (fs *filesystem) MountOptions() string {
+	return ""
+}
+
 // inode implements kernfs.Inode.
 //
 // +stateify savable
 type inode struct {
+	kernfs.InodeAnonymous
 	kernfs.InodeAttrs
 	kernfs.InodeNoopRefCount
 	kernfs.InodeNotDirectory
 	kernfs.InodeNotSymlink
+	kernfs.InodeWatches
 }
 
 // Open implements kernfs.Inode.Open.
 func (i *inode) Open(ctx context.Context, rp *vfs.ResolvingPath, d *kernfs.Dentry, opts vfs.OpenOptions) (*vfs.FileDescription, error) {
-	return nil, syserror.ENXIO
+	return nil, linuxerr.ENXIO
 }
 
 // StatFS implements kernfs.Inode.StatFS.
@@ -112,7 +119,7 @@ func NewDentry(ctx context.Context, mnt *vfs.Mount) *vfs.Dentry {
 	fs := mnt.Filesystem().Impl().(*filesystem)
 
 	// File mode matches net/socket.c:sock_alloc.
-	filemode := linux.FileMode(linux.S_IFSOCK | 0600)
+	filemode := linux.FileMode(linux.S_IFSOCK | 0777)
 	i := &inode{}
 	i.InodeAttrs.Init(ctx, auth.CredentialsFromContext(ctx), linux.UNNAMED_MAJOR, fs.devMinor, fs.Filesystem.NextIno(), filemode)
 

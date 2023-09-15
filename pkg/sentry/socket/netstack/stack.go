@@ -16,12 +16,14 @@ package netstack
 
 import (
 	"fmt"
+	"time"
 
 	"gvisor.dev/gvisor/pkg/abi/linux"
+	"gvisor.dev/gvisor/pkg/errors/linuxerr"
 	"gvisor.dev/gvisor/pkg/log"
+	"gvisor.dev/gvisor/pkg/refs"
 	"gvisor.dev/gvisor/pkg/sentry/inet"
 	"gvisor.dev/gvisor/pkg/syserr"
-	"gvisor.dev/gvisor/pkg/syserror"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
@@ -35,6 +37,16 @@ import (
 // +stateify savable
 type Stack struct {
 	Stack *stack.Stack `state:"manual"`
+}
+
+// Destroy implements inet.Stack.Destroy.
+func (s *Stack) Destroy() {
+	s.Stack.Close()
+	refs.CleanupSync.Add(1)
+	go func() {
+		s.Stack.Wait()
+		refs.CleanupSync.Done()
+	}()
 }
 
 // SupportsIPv6 implements Stack.SupportsIPv6.
@@ -71,6 +83,23 @@ func (s *Stack) Interfaces() map[int32]inet.Interface {
 	return is
 }
 
+// RemoveInterface implements inet.Stack.RemoveInterface.
+func (s *Stack) RemoveInterface(idx int32) error {
+	nic := tcpip.NICID(idx)
+
+	nicInfo, ok := s.Stack.NICInfo()[nic]
+	if !ok {
+		return syserr.ErrUnknownNICID.ToError()
+	}
+
+	// Don't allow removing the loopback interface.
+	if nicInfo.Flags.Loopback {
+		return syserr.ErrNotSupported.ToError()
+	}
+
+	return syserr.TranslateNetstackError(s.Stack.RemoveNIC(nic)).ToError()
+}
+
 // InterfaceAddrs implements inet.Stack.InterfaceAddrs.
 func (s *Stack) InterfaceAddrs() map[int32][]inet.InterfaceAddr {
 	nicAddrs := make(map[int32][]inet.InterfaceAddr)
@@ -88,10 +117,11 @@ func (s *Stack) InterfaceAddrs() map[int32][]inet.InterfaceAddr {
 				continue
 			}
 
+			addrCopy := a.AddressWithPrefix.Address
 			addrs = append(addrs, inet.InterfaceAddr{
 				Family:    family,
 				PrefixLen: uint8(a.AddressWithPrefix.PrefixLen),
-				Addr:      []byte(a.AddressWithPrefix.Address),
+				Addr:      addrCopy.AsSlice(),
 				// TODO(b/68878065): Other fields.
 			})
 		}
@@ -110,24 +140,24 @@ func convertAddr(addr inet.InterfaceAddr) (tcpip.ProtocolAddress, error) {
 	switch addr.Family {
 	case linux.AF_INET:
 		if len(addr.Addr) != header.IPv4AddressSize {
-			return protocolAddress, syserror.EINVAL
+			return protocolAddress, linuxerr.EINVAL
 		}
 		if addr.PrefixLen > header.IPv4AddressSize*8 {
-			return protocolAddress, syserror.EINVAL
+			return protocolAddress, linuxerr.EINVAL
 		}
 		protocol = ipv4.ProtocolNumber
-		address = tcpip.Address(addr.Addr)
+		address = tcpip.AddrFrom4Slice(addr.Addr)
 	case linux.AF_INET6:
 		if len(addr.Addr) != header.IPv6AddressSize {
-			return protocolAddress, syserror.EINVAL
+			return protocolAddress, linuxerr.EINVAL
 		}
 		if addr.PrefixLen > header.IPv6AddressSize*8 {
-			return protocolAddress, syserror.EINVAL
+			return protocolAddress, linuxerr.EINVAL
 		}
 		protocol = ipv6.ProtocolNumber
-		address = tcpip.Address(addr.Addr)
+		address = tcpip.AddrFrom16Slice(addr.Addr)
 	default:
-		return protocolAddress, syserror.ENOTSUP
+		return protocolAddress, linuxerr.ENOTSUP
 	}
 
 	protocolAddress = tcpip.ProtocolAddress{
@@ -149,14 +179,14 @@ func (s *Stack) AddInterfaceAddr(idx int32, addr inet.InterfaceAddr) error {
 
 	// Attach address to interface.
 	nicID := tcpip.NICID(idx)
-	if err := s.Stack.AddProtocolAddressWithOptions(nicID, protocolAddress, stack.CanBePrimaryEndpoint); err != nil {
+	if err := s.Stack.AddProtocolAddress(nicID, protocolAddress, stack.AddressProperties{}); err != nil {
 		return syserr.TranslateNetstackError(err).ToError()
 	}
 
 	// Add route for local network if it doesn't exist already.
 	localRoute := tcpip.Route{
 		Destination: protocolAddress.AddressWithPrefix.Subnet(),
-		Gateway:     "", // No gateway for local network.
+		Gateway:     tcpip.Address{}, // No gateway for local network.
 		NIC:         nicID,
 	}
 
@@ -188,7 +218,7 @@ func (s *Stack) RemoveInterfaceAddr(idx int32, addr inet.InterfaceAddr) error {
 	// Remove the corresponding local network route if it exists.
 	localRoute := tcpip.Route{
 		Destination: protocolAddress.AddressWithPrefix.Subnet(),
-		Gateway:     "", // No gateway for local network.
+		Gateway:     tcpip.Address{}, // No gateway for local network.
 		NIC:         nicID,
 	}
 	s.Stack.RemoveRoutes(func(rt tcpip.Route) bool {
@@ -269,7 +299,7 @@ func (s *Stack) SetTCPRecovery(recovery inet.TCPLossRecovery) error {
 }
 
 // Statistics implements inet.Stack.Statistics.
-func (s *Stack) Statistics(stat interface{}, arg string) error {
+func (s *Stack) Statistics(stat any, arg string) error {
 	switch stats := stat.(type) {
 	case *inet.StatDev:
 		for _, ni := range s.Stack.NICInfo() {
@@ -336,7 +366,7 @@ func (s *Stack) Statistics(stat interface{}, arg string) error {
 			in.ParamProblem.Value(),   // InParmProbs.
 			in.SrcQuench.Value(),      // InSrcQuenchs.
 			in.Redirect.Value(),       // InRedirects.
-			in.Echo.Value(),           // InEchos.
+			in.EchoRequest.Value(),    // InEchos.
 			in.EchoReply.Value(),      // InEchoReps.
 			in.Timestamp.Value(),      // InTimestamps.
 			in.TimestampReply.Value(), // InTimestampReps.
@@ -349,7 +379,7 @@ func (s *Stack) Statistics(stat interface{}, arg string) error {
 			out.ParamProblem.Value(),                        // OutParmProbs.
 			out.SrcQuench.Value(),                           // OutSrcQuenchs.
 			out.Redirect.Value(),                            // OutRedirects.
-			out.Echo.Value(),                                // OutEchos.
+			out.EchoRequest.Value(),                         // OutEchos.
 			out.EchoReply.Value(),                           // OutEchoReps.
 			out.Timestamp.Value(),                           // OutTimestamps.
 			out.TimestampReply.Value(),                      // OutTimestampReps.
@@ -401,16 +431,17 @@ func (s *Stack) RouteTable() []inet.Route {
 
 	for _, rt := range s.Stack.GetRouteTable() {
 		var family uint8
-		switch len(rt.Destination.ID()) {
-		case header.IPv4AddressSize:
+		switch rt.Destination.ID().BitLen() {
+		case header.IPv4AddressSizeBits:
 			family = linux.AF_INET
-		case header.IPv6AddressSize:
+		case header.IPv6AddressSizeBits:
 			family = linux.AF_INET6
 		default:
 			log.Warningf("Unknown network protocol in route %+v", rt)
 			continue
 		}
 
+		dstAddr := rt.Destination.ID()
 		routeTable = append(routeTable, inet.Route{
 			Family: family,
 			DstLen: uint8(rt.Destination.Prefix()), // The CIDR prefix for the destination.
@@ -424,9 +455,9 @@ func (s *Stack) RouteTable() []inet.Route {
 			Scope: linux.RT_SCOPE_LINK,
 			Type:  linux.RTN_UNICAST,
 
-			DstAddr:         []byte(rt.Destination.ID()),
+			DstAddr:         dstAddr.AsSlice(),
 			OutputInterface: int32(rt.NIC),
-			GatewayAddr:     []byte(rt.Gateway),
+			GatewayAddr:     rt.Gateway.AsSlice(),
 		})
 	}
 
@@ -436,6 +467,11 @@ func (s *Stack) RouteTable() []inet.Route {
 // IPTables returns the stack's iptables.
 func (s *Stack) IPTables() (*stack.IPTables, error) {
 	return s.Stack.IPTables(), nil
+}
+
+// Pause implements inet.Stack.Pause.
+func (s *Stack) Pause() {
+	s.Stack.Pause()
 }
 
 // Resume implements inet.Stack.Resume.
@@ -458,23 +494,31 @@ func (s *Stack) RestoreCleanupEndpoints(es []stack.TransportEndpoint) {
 	s.Stack.RestoreCleanupEndpoints(es)
 }
 
-// Forwarding implements inet.Stack.Forwarding.
-func (s *Stack) Forwarding(protocol tcpip.NetworkProtocolNumber) bool {
-	switch protocol {
-	case ipv4.ProtocolNumber, ipv6.ProtocolNumber:
-		return s.Stack.Forwarding(protocol)
-	default:
-		panic(fmt.Sprintf("Forwarding(%v) failed: unsupported protocol", protocol))
-	}
-}
-
 // SetForwarding implements inet.Stack.SetForwarding.
 func (s *Stack) SetForwarding(protocol tcpip.NetworkProtocolNumber, enable bool) error {
-	switch protocol {
-	case ipv4.ProtocolNumber, ipv6.ProtocolNumber:
-		s.Stack.SetForwarding(protocol, enable)
-	default:
-		panic(fmt.Sprintf("SetForwarding(%v) failed: unsupported protocol", protocol))
+	if err := s.Stack.SetForwardingDefaultAndAllNICs(protocol, enable); err != nil {
+		return fmt.Errorf("SetForwardingDefaultAndAllNICs(%d, %t): %s", protocol, enable, err)
 	}
 	return nil
+}
+
+// PortRange implements inet.Stack.PortRange.
+func (s *Stack) PortRange() (uint16, uint16) {
+	return s.Stack.PortRange()
+}
+
+// SetPortRange implements inet.Stack.SetPortRange.
+func (s *Stack) SetPortRange(start uint16, end uint16) error {
+	return syserr.TranslateNetstackError(s.Stack.SetPortRange(start, end)).ToError()
+}
+
+// GROTimeout implements inet.Stack.GROTimeout.
+func (s *Stack) GROTimeout(nicID int32) (time.Duration, error) {
+	timeout, err := s.Stack.GROTimeout(tcpip.NICID(nicID))
+	return timeout, syserr.TranslateNetstackError(err).ToError()
+}
+
+// SetGROTimeout implements inet.Stack.SetGROTimeout.
+func (s *Stack) SetGROTimeout(nicID int32, timeout time.Duration) error {
+	return syserr.TranslateNetstackError(s.Stack.SetGROTimeout(tcpip.NICID(nicID), timeout)).ToError()
 }

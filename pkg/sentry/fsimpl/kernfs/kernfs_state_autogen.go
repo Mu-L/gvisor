@@ -19,6 +19,7 @@ func (l *dentryList) StateFields() []string {
 
 func (l *dentryList) beforeSave() {}
 
+// +checklocksignore
 func (l *dentryList) StateSave(stateSinkObject state.Sink) {
 	l.beforeSave()
 	stateSinkObject.Save(0, &l.head)
@@ -27,6 +28,7 @@ func (l *dentryList) StateSave(stateSinkObject state.Sink) {
 
 func (l *dentryList) afterLoad() {}
 
+// +checklocksignore
 func (l *dentryList) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &l.head)
 	stateSourceObject.Load(1, &l.tail)
@@ -45,6 +47,7 @@ func (e *dentryEntry) StateFields() []string {
 
 func (e *dentryEntry) beforeSave() {}
 
+// +checklocksignore
 func (e *dentryEntry) StateSave(stateSinkObject state.Sink) {
 	e.beforeSave()
 	stateSinkObject.Save(0, &e.next)
@@ -53,6 +56,7 @@ func (e *dentryEntry) StateSave(stateSinkObject state.Sink) {
 
 func (e *dentryEntry) afterLoad() {}
 
+// +checklocksignore
 func (e *dentryEntry) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &e.next)
 	stateSourceObject.Load(1, &e.prev)
@@ -67,8 +71,10 @@ func (f *DynamicBytesFile) StateFields() []string {
 		"InodeAttrs",
 		"InodeNoStatFS",
 		"InodeNoopRefCount",
+		"InodeNotAnonymous",
 		"InodeNotDirectory",
 		"InodeNotSymlink",
+		"InodeWatches",
 		"locks",
 		"data",
 	}
@@ -76,27 +82,33 @@ func (f *DynamicBytesFile) StateFields() []string {
 
 func (f *DynamicBytesFile) beforeSave() {}
 
+// +checklocksignore
 func (f *DynamicBytesFile) StateSave(stateSinkObject state.Sink) {
 	f.beforeSave()
 	stateSinkObject.Save(0, &f.InodeAttrs)
 	stateSinkObject.Save(1, &f.InodeNoStatFS)
 	stateSinkObject.Save(2, &f.InodeNoopRefCount)
-	stateSinkObject.Save(3, &f.InodeNotDirectory)
-	stateSinkObject.Save(4, &f.InodeNotSymlink)
-	stateSinkObject.Save(5, &f.locks)
-	stateSinkObject.Save(6, &f.data)
+	stateSinkObject.Save(3, &f.InodeNotAnonymous)
+	stateSinkObject.Save(4, &f.InodeNotDirectory)
+	stateSinkObject.Save(5, &f.InodeNotSymlink)
+	stateSinkObject.Save(6, &f.InodeWatches)
+	stateSinkObject.Save(7, &f.locks)
+	stateSinkObject.Save(8, &f.data)
 }
 
 func (f *DynamicBytesFile) afterLoad() {}
 
+// +checklocksignore
 func (f *DynamicBytesFile) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &f.InodeAttrs)
 	stateSourceObject.Load(1, &f.InodeNoStatFS)
 	stateSourceObject.Load(2, &f.InodeNoopRefCount)
-	stateSourceObject.Load(3, &f.InodeNotDirectory)
-	stateSourceObject.Load(4, &f.InodeNotSymlink)
-	stateSourceObject.Load(5, &f.locks)
-	stateSourceObject.Load(6, &f.data)
+	stateSourceObject.Load(3, &f.InodeNotAnonymous)
+	stateSourceObject.Load(4, &f.InodeNotDirectory)
+	stateSourceObject.Load(5, &f.InodeNotSymlink)
+	stateSourceObject.Load(6, &f.InodeWatches)
+	stateSourceObject.Load(7, &f.locks)
+	stateSourceObject.Load(8, &f.data)
 }
 
 func (fd *DynamicBytesFD) StateTypeName() string {
@@ -115,6 +127,7 @@ func (fd *DynamicBytesFD) StateFields() []string {
 
 func (fd *DynamicBytesFD) beforeSave() {}
 
+// +checklocksignore
 func (fd *DynamicBytesFD) StateSave(stateSinkObject state.Sink) {
 	fd.beforeSave()
 	stateSinkObject.Save(0, &fd.FileDescriptionDefaultImpl)
@@ -126,6 +139,7 @@ func (fd *DynamicBytesFD) StateSave(stateSinkObject state.Sink) {
 
 func (fd *DynamicBytesFD) afterLoad() {}
 
+// +checklocksignore
 func (fd *DynamicBytesFD) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &fd.FileDescriptionDefaultImpl)
 	stateSourceObject.Load(1, &fd.DynamicBytesFileDescriptionImpl)
@@ -154,6 +168,7 @@ func (g *GenericDirectoryFDOptions) StateFields() []string {
 
 func (g *GenericDirectoryFDOptions) beforeSave() {}
 
+// +checklocksignore
 func (g *GenericDirectoryFDOptions) StateSave(stateSinkObject state.Sink) {
 	g.beforeSave()
 	stateSinkObject.Save(0, &g.SeekEnd)
@@ -161,6 +176,7 @@ func (g *GenericDirectoryFDOptions) StateSave(stateSinkObject state.Sink) {
 
 func (g *GenericDirectoryFDOptions) afterLoad() {}
 
+// +checklocksignore
 func (g *GenericDirectoryFDOptions) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &g.SeekEnd)
 }
@@ -183,6 +199,7 @@ func (fd *GenericDirectoryFD) StateFields() []string {
 
 func (fd *GenericDirectoryFD) beforeSave() {}
 
+// +checklocksignore
 func (fd *GenericDirectoryFD) StateSave(stateSinkObject state.Sink) {
 	fd.beforeSave()
 	stateSinkObject.Save(0, &fd.FileDescriptionDefaultImpl)
@@ -196,6 +213,7 @@ func (fd *GenericDirectoryFD) StateSave(stateSinkObject state.Sink) {
 
 func (fd *GenericDirectoryFD) afterLoad() {}
 
+// +checklocksignore
 func (fd *GenericDirectoryFD) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &fd.FileDescriptionDefaultImpl)
 	stateSourceObject.Load(1, &fd.DirectoryFileDescriptionDefaultImpl)
@@ -218,6 +236,7 @@ func (i *InodeNoopRefCount) StateFields() []string {
 
 func (i *InodeNoopRefCount) beforeSave() {}
 
+// +checklocksignore
 func (i *InodeNoopRefCount) StateSave(stateSinkObject state.Sink) {
 	i.beforeSave()
 	stateSinkObject.Save(0, &i.InodeTemporary)
@@ -225,6 +244,7 @@ func (i *InodeNoopRefCount) StateSave(stateSinkObject state.Sink) {
 
 func (i *InodeNoopRefCount) afterLoad() {}
 
+// +checklocksignore
 func (i *InodeNoopRefCount) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &i.InodeTemporary)
 }
@@ -239,12 +259,14 @@ func (i *InodeDirectoryNoNewChildren) StateFields() []string {
 
 func (i *InodeDirectoryNoNewChildren) beforeSave() {}
 
+// +checklocksignore
 func (i *InodeDirectoryNoNewChildren) StateSave(stateSinkObject state.Sink) {
 	i.beforeSave()
 }
 
 func (i *InodeDirectoryNoNewChildren) afterLoad() {}
 
+// +checklocksignore
 func (i *InodeDirectoryNoNewChildren) StateLoad(stateSourceObject state.Source) {
 }
 
@@ -260,6 +282,7 @@ func (i *InodeNotDirectory) StateFields() []string {
 
 func (i *InodeNotDirectory) beforeSave() {}
 
+// +checklocksignore
 func (i *InodeNotDirectory) StateSave(stateSinkObject state.Sink) {
 	i.beforeSave()
 	stateSinkObject.Save(0, &i.InodeAlwaysValid)
@@ -267,6 +290,7 @@ func (i *InodeNotDirectory) StateSave(stateSinkObject state.Sink) {
 
 func (i *InodeNotDirectory) afterLoad() {}
 
+// +checklocksignore
 func (i *InodeNotDirectory) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &i.InodeAlwaysValid)
 }
@@ -281,12 +305,14 @@ func (i *InodeNotSymlink) StateFields() []string {
 
 func (i *InodeNotSymlink) beforeSave() {}
 
+// +checklocksignore
 func (i *InodeNotSymlink) StateSave(stateSinkObject state.Sink) {
 	i.beforeSave()
 }
 
 func (i *InodeNotSymlink) afterLoad() {}
 
+// +checklocksignore
 func (i *InodeNotSymlink) StateLoad(stateSourceObject state.Source) {
 }
 
@@ -312,6 +338,7 @@ func (a *InodeAttrs) StateFields() []string {
 
 func (a *InodeAttrs) beforeSave() {}
 
+// +checklocksignore
 func (a *InodeAttrs) StateSave(stateSinkObject state.Sink) {
 	a.beforeSave()
 	stateSinkObject.Save(0, &a.devMajor)
@@ -329,6 +356,7 @@ func (a *InodeAttrs) StateSave(stateSinkObject state.Sink) {
 
 func (a *InodeAttrs) afterLoad() {}
 
+// +checklocksignore
 func (a *InodeAttrs) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &a.devMajor)
 	stateSourceObject.Load(1, &a.devMinor)
@@ -358,6 +386,7 @@ func (s *slot) StateFields() []string {
 
 func (s *slot) beforeSave() {}
 
+// +checklocksignore
 func (s *slot) StateSave(stateSinkObject state.Sink) {
 	s.beforeSave()
 	stateSinkObject.Save(0, &s.name)
@@ -368,6 +397,7 @@ func (s *slot) StateSave(stateSinkObject state.Sink) {
 
 func (s *slot) afterLoad() {}
 
+// +checklocksignore
 func (s *slot) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &s.name)
 	stateSourceObject.Load(1, &s.inode)
@@ -387,6 +417,7 @@ func (o *OrderedChildrenOptions) StateFields() []string {
 
 func (o *OrderedChildrenOptions) beforeSave() {}
 
+// +checklocksignore
 func (o *OrderedChildrenOptions) StateSave(stateSinkObject state.Sink) {
 	o.beforeSave()
 	stateSinkObject.Save(0, &o.Writable)
@@ -394,6 +425,7 @@ func (o *OrderedChildrenOptions) StateSave(stateSinkObject state.Sink) {
 
 func (o *OrderedChildrenOptions) afterLoad() {}
 
+// +checklocksignore
 func (o *OrderedChildrenOptions) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &o.Writable)
 }
@@ -412,6 +444,7 @@ func (o *OrderedChildren) StateFields() []string {
 
 func (o *OrderedChildren) beforeSave() {}
 
+// +checklocksignore
 func (o *OrderedChildren) StateSave(stateSinkObject state.Sink) {
 	o.beforeSave()
 	stateSinkObject.Save(0, &o.writable)
@@ -421,6 +454,7 @@ func (o *OrderedChildren) StateSave(stateSinkObject state.Sink) {
 
 func (o *OrderedChildren) afterLoad() {}
 
+// +checklocksignore
 func (o *OrderedChildren) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &o.writable)
 	stateSourceObject.Load(1, &o.order)
@@ -439,6 +473,7 @@ func (i *InodeSymlink) StateFields() []string {
 
 func (i *InodeSymlink) beforeSave() {}
 
+// +checklocksignore
 func (i *InodeSymlink) StateSave(stateSinkObject state.Sink) {
 	i.beforeSave()
 	stateSinkObject.Save(0, &i.InodeNotDirectory)
@@ -446,6 +481,7 @@ func (i *InodeSymlink) StateSave(stateSinkObject state.Sink) {
 
 func (i *InodeSymlink) afterLoad() {}
 
+// +checklocksignore
 func (i *InodeSymlink) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &i.InodeNotDirectory)
 }
@@ -460,8 +496,10 @@ func (s *StaticDirectory) StateFields() []string {
 		"InodeAttrs",
 		"InodeDirectoryNoNewChildren",
 		"InodeNoStatFS",
+		"InodeNotAnonymous",
 		"InodeNotSymlink",
 		"InodeTemporary",
+		"InodeWatches",
 		"OrderedChildren",
 		"StaticDirectoryRefs",
 		"locks",
@@ -471,33 +509,39 @@ func (s *StaticDirectory) StateFields() []string {
 
 func (s *StaticDirectory) beforeSave() {}
 
+// +checklocksignore
 func (s *StaticDirectory) StateSave(stateSinkObject state.Sink) {
 	s.beforeSave()
 	stateSinkObject.Save(0, &s.InodeAlwaysValid)
 	stateSinkObject.Save(1, &s.InodeAttrs)
 	stateSinkObject.Save(2, &s.InodeDirectoryNoNewChildren)
 	stateSinkObject.Save(3, &s.InodeNoStatFS)
-	stateSinkObject.Save(4, &s.InodeNotSymlink)
-	stateSinkObject.Save(5, &s.InodeTemporary)
-	stateSinkObject.Save(6, &s.OrderedChildren)
-	stateSinkObject.Save(7, &s.StaticDirectoryRefs)
-	stateSinkObject.Save(8, &s.locks)
-	stateSinkObject.Save(9, &s.fdOpts)
+	stateSinkObject.Save(4, &s.InodeNotAnonymous)
+	stateSinkObject.Save(5, &s.InodeNotSymlink)
+	stateSinkObject.Save(6, &s.InodeTemporary)
+	stateSinkObject.Save(7, &s.InodeWatches)
+	stateSinkObject.Save(8, &s.OrderedChildren)
+	stateSinkObject.Save(9, &s.StaticDirectoryRefs)
+	stateSinkObject.Save(10, &s.locks)
+	stateSinkObject.Save(11, &s.fdOpts)
 }
 
 func (s *StaticDirectory) afterLoad() {}
 
+// +checklocksignore
 func (s *StaticDirectory) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &s.InodeAlwaysValid)
 	stateSourceObject.Load(1, &s.InodeAttrs)
 	stateSourceObject.Load(2, &s.InodeDirectoryNoNewChildren)
 	stateSourceObject.Load(3, &s.InodeNoStatFS)
-	stateSourceObject.Load(4, &s.InodeNotSymlink)
-	stateSourceObject.Load(5, &s.InodeTemporary)
-	stateSourceObject.Load(6, &s.OrderedChildren)
-	stateSourceObject.Load(7, &s.StaticDirectoryRefs)
-	stateSourceObject.Load(8, &s.locks)
-	stateSourceObject.Load(9, &s.fdOpts)
+	stateSourceObject.Load(4, &s.InodeNotAnonymous)
+	stateSourceObject.Load(5, &s.InodeNotSymlink)
+	stateSourceObject.Load(6, &s.InodeTemporary)
+	stateSourceObject.Load(7, &s.InodeWatches)
+	stateSourceObject.Load(8, &s.OrderedChildren)
+	stateSourceObject.Load(9, &s.StaticDirectoryRefs)
+	stateSourceObject.Load(10, &s.locks)
+	stateSourceObject.Load(11, &s.fdOpts)
 }
 
 func (i *InodeAlwaysValid) StateTypeName() string {
@@ -510,12 +554,14 @@ func (i *InodeAlwaysValid) StateFields() []string {
 
 func (i *InodeAlwaysValid) beforeSave() {}
 
+// +checklocksignore
 func (i *InodeAlwaysValid) StateSave(stateSinkObject state.Sink) {
 	i.beforeSave()
 }
 
 func (i *InodeAlwaysValid) afterLoad() {}
 
+// +checklocksignore
 func (i *InodeAlwaysValid) StateLoad(stateSourceObject state.Source) {
 }
 
@@ -529,12 +575,14 @@ func (i *InodeTemporary) StateFields() []string {
 
 func (i *InodeTemporary) beforeSave() {}
 
+// +checklocksignore
 func (i *InodeTemporary) StateSave(stateSinkObject state.Sink) {
 	i.beforeSave()
 }
 
 func (i *InodeTemporary) afterLoad() {}
 
+// +checklocksignore
 func (i *InodeTemporary) StateLoad(stateSourceObject state.Source) {
 }
 
@@ -548,13 +596,82 @@ func (i *InodeNoStatFS) StateFields() []string {
 
 func (i *InodeNoStatFS) beforeSave() {}
 
+// +checklocksignore
 func (i *InodeNoStatFS) StateSave(stateSinkObject state.Sink) {
 	i.beforeSave()
 }
 
 func (i *InodeNoStatFS) afterLoad() {}
 
+// +checklocksignore
 func (i *InodeNoStatFS) StateLoad(stateSourceObject state.Source) {
+}
+
+func (i *InodeWatches) StateTypeName() string {
+	return "pkg/sentry/fsimpl/kernfs.InodeWatches"
+}
+
+func (i *InodeWatches) StateFields() []string {
+	return []string{
+		"watches",
+	}
+}
+
+func (i *InodeWatches) beforeSave() {}
+
+// +checklocksignore
+func (i *InodeWatches) StateSave(stateSinkObject state.Sink) {
+	i.beforeSave()
+	stateSinkObject.Save(0, &i.watches)
+}
+
+func (i *InodeWatches) afterLoad() {}
+
+// +checklocksignore
+func (i *InodeWatches) StateLoad(stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &i.watches)
+}
+
+func (i *InodeAnonymous) StateTypeName() string {
+	return "pkg/sentry/fsimpl/kernfs.InodeAnonymous"
+}
+
+func (i *InodeAnonymous) StateFields() []string {
+	return []string{}
+}
+
+func (i *InodeAnonymous) beforeSave() {}
+
+// +checklocksignore
+func (i *InodeAnonymous) StateSave(stateSinkObject state.Sink) {
+	i.beforeSave()
+}
+
+func (i *InodeAnonymous) afterLoad() {}
+
+// +checklocksignore
+func (i *InodeAnonymous) StateLoad(stateSourceObject state.Source) {
+}
+
+func (i *InodeNotAnonymous) StateTypeName() string {
+	return "pkg/sentry/fsimpl/kernfs.InodeNotAnonymous"
+}
+
+func (i *InodeNotAnonymous) StateFields() []string {
+	return []string{}
+}
+
+func (i *InodeNotAnonymous) beforeSave() {}
+
+// +checklocksignore
+func (i *InodeNotAnonymous) StateSave(stateSinkObject state.Sink) {
+	i.beforeSave()
+}
+
+func (i *InodeNotAnonymous) afterLoad() {}
+
+// +checklocksignore
+func (i *InodeNotAnonymous) StateLoad(stateSourceObject state.Source) {
 }
 
 func (fs *Filesystem) StateTypeName() string {
@@ -564,7 +681,7 @@ func (fs *Filesystem) StateTypeName() string {
 func (fs *Filesystem) StateFields() []string {
 	return []string{
 		"vfsfs",
-		"droppedDentries",
+		"deferredDecRefs",
 		"nextInoMinusOne",
 		"cachedDentries",
 		"cachedDentriesLen",
@@ -575,10 +692,11 @@ func (fs *Filesystem) StateFields() []string {
 
 func (fs *Filesystem) beforeSave() {}
 
+// +checklocksignore
 func (fs *Filesystem) StateSave(stateSinkObject state.Sink) {
 	fs.beforeSave()
 	stateSinkObject.Save(0, &fs.vfsfs)
-	stateSinkObject.Save(1, &fs.droppedDentries)
+	stateSinkObject.Save(1, &fs.deferredDecRefs)
 	stateSinkObject.Save(2, &fs.nextInoMinusOne)
 	stateSinkObject.Save(3, &fs.cachedDentries)
 	stateSinkObject.Save(4, &fs.cachedDentriesLen)
@@ -588,9 +706,10 @@ func (fs *Filesystem) StateSave(stateSinkObject state.Sink) {
 
 func (fs *Filesystem) afterLoad() {}
 
+// +checklocksignore
 func (fs *Filesystem) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &fs.vfsfs)
-	stateSourceObject.Load(1, &fs.droppedDentries)
+	stateSourceObject.Load(1, &fs.deferredDecRefs)
 	stateSourceObject.Load(2, &fs.nextInoMinusOne)
 	stateSourceObject.Load(3, &fs.cachedDentries)
 	stateSourceObject.Load(4, &fs.cachedDentriesLen)
@@ -614,11 +733,13 @@ func (d *Dentry) StateFields() []string {
 		"dentryEntry",
 		"children",
 		"inode",
+		"deleted",
 	}
 }
 
 func (d *Dentry) beforeSave() {}
 
+// +checklocksignore
 func (d *Dentry) StateSave(stateSinkObject state.Sink) {
 	d.beforeSave()
 	stateSinkObject.Save(0, &d.vfsd)
@@ -631,8 +752,10 @@ func (d *Dentry) StateSave(stateSinkObject state.Sink) {
 	stateSinkObject.Save(7, &d.dentryEntry)
 	stateSinkObject.Save(8, &d.children)
 	stateSinkObject.Save(9, &d.inode)
+	stateSinkObject.Save(10, &d.deleted)
 }
 
+// +checklocksignore
 func (d *Dentry) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &d.vfsd)
 	stateSourceObject.Load(1, &d.refs)
@@ -644,6 +767,7 @@ func (d *Dentry) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(7, &d.dentryEntry)
 	stateSourceObject.Load(8, &d.children)
 	stateSourceObject.Load(9, &d.inode)
+	stateSourceObject.Load(10, &d.deleted)
 	stateSourceObject.AfterLoad(d.afterLoad)
 }
 
@@ -661,6 +785,7 @@ func (i *inodePlatformFile) StateFields() []string {
 
 func (i *inodePlatformFile) beforeSave() {}
 
+// +checklocksignore
 func (i *inodePlatformFile) StateSave(stateSinkObject state.Sink) {
 	i.beforeSave()
 	stateSinkObject.Save(0, &i.hostFD)
@@ -668,6 +793,7 @@ func (i *inodePlatformFile) StateSave(stateSinkObject state.Sink) {
 	stateSinkObject.Save(2, &i.fileMapper)
 }
 
+// +checklocksignore
 func (i *inodePlatformFile) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &i.hostFD)
 	stateSourceObject.Load(1, &i.fdRefs)
@@ -688,6 +814,7 @@ func (i *CachedMappable) StateFields() []string {
 
 func (i *CachedMappable) beforeSave() {}
 
+// +checklocksignore
 func (i *CachedMappable) StateSave(stateSinkObject state.Sink) {
 	i.beforeSave()
 	stateSinkObject.Save(0, &i.mappings)
@@ -696,6 +823,7 @@ func (i *CachedMappable) StateSave(stateSinkObject state.Sink) {
 
 func (i *CachedMappable) afterLoad() {}
 
+// +checklocksignore
 func (i *CachedMappable) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &i.mappings)
 	stateSourceObject.Load(1, &i.pf)
@@ -714,6 +842,7 @@ func (l *slotList) StateFields() []string {
 
 func (l *slotList) beforeSave() {}
 
+// +checklocksignore
 func (l *slotList) StateSave(stateSinkObject state.Sink) {
 	l.beforeSave()
 	stateSinkObject.Save(0, &l.head)
@@ -722,6 +851,7 @@ func (l *slotList) StateSave(stateSinkObject state.Sink) {
 
 func (l *slotList) afterLoad() {}
 
+// +checklocksignore
 func (l *slotList) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &l.head)
 	stateSourceObject.Load(1, &l.tail)
@@ -740,6 +870,7 @@ func (e *slotEntry) StateFields() []string {
 
 func (e *slotEntry) beforeSave() {}
 
+// +checklocksignore
 func (e *slotEntry) StateSave(stateSinkObject state.Sink) {
 	e.beforeSave()
 	stateSinkObject.Save(0, &e.next)
@@ -748,6 +879,7 @@ func (e *slotEntry) StateSave(stateSinkObject state.Sink) {
 
 func (e *slotEntry) afterLoad() {}
 
+// +checklocksignore
 func (e *slotEntry) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &e.next)
 	stateSourceObject.Load(1, &e.prev)
@@ -765,11 +897,13 @@ func (r *StaticDirectoryRefs) StateFields() []string {
 
 func (r *StaticDirectoryRefs) beforeSave() {}
 
+// +checklocksignore
 func (r *StaticDirectoryRefs) StateSave(stateSinkObject state.Sink) {
 	r.beforeSave()
 	stateSinkObject.Save(0, &r.refCount)
 }
 
+// +checklocksignore
 func (r *StaticDirectoryRefs) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &r.refCount)
 	stateSourceObject.AfterLoad(r.afterLoad)
@@ -783,31 +917,39 @@ func (s *StaticSymlink) StateFields() []string {
 	return []string{
 		"InodeAttrs",
 		"InodeNoopRefCount",
+		"InodeNotAnonymous",
 		"InodeSymlink",
 		"InodeNoStatFS",
+		"InodeWatches",
 		"target",
 	}
 }
 
 func (s *StaticSymlink) beforeSave() {}
 
+// +checklocksignore
 func (s *StaticSymlink) StateSave(stateSinkObject state.Sink) {
 	s.beforeSave()
 	stateSinkObject.Save(0, &s.InodeAttrs)
 	stateSinkObject.Save(1, &s.InodeNoopRefCount)
-	stateSinkObject.Save(2, &s.InodeSymlink)
-	stateSinkObject.Save(3, &s.InodeNoStatFS)
-	stateSinkObject.Save(4, &s.target)
+	stateSinkObject.Save(2, &s.InodeNotAnonymous)
+	stateSinkObject.Save(3, &s.InodeSymlink)
+	stateSinkObject.Save(4, &s.InodeNoStatFS)
+	stateSinkObject.Save(5, &s.InodeWatches)
+	stateSinkObject.Save(6, &s.target)
 }
 
 func (s *StaticSymlink) afterLoad() {}
 
+// +checklocksignore
 func (s *StaticSymlink) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &s.InodeAttrs)
 	stateSourceObject.Load(1, &s.InodeNoopRefCount)
-	stateSourceObject.Load(2, &s.InodeSymlink)
-	stateSourceObject.Load(3, &s.InodeNoStatFS)
-	stateSourceObject.Load(4, &s.target)
+	stateSourceObject.Load(2, &s.InodeNotAnonymous)
+	stateSourceObject.Load(3, &s.InodeSymlink)
+	stateSourceObject.Load(4, &s.InodeNoStatFS)
+	stateSourceObject.Load(5, &s.InodeWatches)
+	stateSourceObject.Load(6, &s.target)
 }
 
 func (dir *syntheticDirectory) StateTypeName() string {
@@ -819,7 +961,9 @@ func (dir *syntheticDirectory) StateFields() []string {
 		"InodeAlwaysValid",
 		"InodeAttrs",
 		"InodeNoStatFS",
+		"InodeNotAnonymous",
 		"InodeNotSymlink",
+		"InodeWatches",
 		"OrderedChildren",
 		"syntheticDirectoryRefs",
 		"locks",
@@ -828,27 +972,33 @@ func (dir *syntheticDirectory) StateFields() []string {
 
 func (dir *syntheticDirectory) beforeSave() {}
 
+// +checklocksignore
 func (dir *syntheticDirectory) StateSave(stateSinkObject state.Sink) {
 	dir.beforeSave()
 	stateSinkObject.Save(0, &dir.InodeAlwaysValid)
 	stateSinkObject.Save(1, &dir.InodeAttrs)
 	stateSinkObject.Save(2, &dir.InodeNoStatFS)
-	stateSinkObject.Save(3, &dir.InodeNotSymlink)
-	stateSinkObject.Save(4, &dir.OrderedChildren)
-	stateSinkObject.Save(5, &dir.syntheticDirectoryRefs)
-	stateSinkObject.Save(6, &dir.locks)
+	stateSinkObject.Save(3, &dir.InodeNotAnonymous)
+	stateSinkObject.Save(4, &dir.InodeNotSymlink)
+	stateSinkObject.Save(5, &dir.InodeWatches)
+	stateSinkObject.Save(6, &dir.OrderedChildren)
+	stateSinkObject.Save(7, &dir.syntheticDirectoryRefs)
+	stateSinkObject.Save(8, &dir.locks)
 }
 
 func (dir *syntheticDirectory) afterLoad() {}
 
+// +checklocksignore
 func (dir *syntheticDirectory) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &dir.InodeAlwaysValid)
 	stateSourceObject.Load(1, &dir.InodeAttrs)
 	stateSourceObject.Load(2, &dir.InodeNoStatFS)
-	stateSourceObject.Load(3, &dir.InodeNotSymlink)
-	stateSourceObject.Load(4, &dir.OrderedChildren)
-	stateSourceObject.Load(5, &dir.syntheticDirectoryRefs)
-	stateSourceObject.Load(6, &dir.locks)
+	stateSourceObject.Load(3, &dir.InodeNotAnonymous)
+	stateSourceObject.Load(4, &dir.InodeNotSymlink)
+	stateSourceObject.Load(5, &dir.InodeWatches)
+	stateSourceObject.Load(6, &dir.OrderedChildren)
+	stateSourceObject.Load(7, &dir.syntheticDirectoryRefs)
+	stateSourceObject.Load(8, &dir.locks)
 }
 
 func (r *syntheticDirectoryRefs) StateTypeName() string {
@@ -863,11 +1013,13 @@ func (r *syntheticDirectoryRefs) StateFields() []string {
 
 func (r *syntheticDirectoryRefs) beforeSave() {}
 
+// +checklocksignore
 func (r *syntheticDirectoryRefs) StateSave(stateSinkObject state.Sink) {
 	r.beforeSave()
 	stateSinkObject.Save(0, &r.refCount)
 }
 
+// +checklocksignore
 func (r *syntheticDirectoryRefs) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &r.refCount)
 	stateSourceObject.AfterLoad(r.afterLoad)
@@ -894,6 +1046,9 @@ func init() {
 	state.Register((*InodeAlwaysValid)(nil))
 	state.Register((*InodeTemporary)(nil))
 	state.Register((*InodeNoStatFS)(nil))
+	state.Register((*InodeWatches)(nil))
+	state.Register((*InodeAnonymous)(nil))
+	state.Register((*InodeNotAnonymous)(nil))
 	state.Register((*Filesystem)(nil))
 	state.Register((*Dentry)(nil))
 	state.Register((*inodePlatformFile)(nil))

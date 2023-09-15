@@ -12,13 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build go1.1
+// +build go1.1
+
 // Binary runsc implements the OCI runtime interface.
 package main
 
 import (
 	"gvisor.dev/gvisor/runsc/cli"
+	"gvisor.dev/gvisor/runsc/version"
 )
 
+// version.Version is set dynamically, but needs to be
+// linked in the binary, so reference it here.
+var _ = version.Version()
+
 func main() {
-	cli.Main(version)
+	cli.Main()
 }

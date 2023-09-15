@@ -16,12 +16,15 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 
 	"github.com/google/subcommands"
+	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/log"
+	"gvisor.dev/gvisor/pkg/state/statefile"
+	"gvisor.dev/gvisor/runsc/cmd/util"
 	"gvisor.dev/gvisor/runsc/config"
 	"gvisor.dev/gvisor/runsc/container"
 	"gvisor.dev/gvisor/runsc/flag"
@@ -35,6 +38,7 @@ const checkpointFileName = "checkpoint.img"
 type Checkpoint struct {
 	imagePath    string
 	leaveRunning bool
+	compression  CheckpointCompression
 }
 
 // Name implements subcommands.Command.Name.
@@ -57,6 +61,7 @@ func (*Checkpoint) Usage() string {
 func (c *Checkpoint) SetFlags(f *flag.FlagSet) {
 	f.StringVar(&c.imagePath, "image-path", "", "directory path to saved container image")
 	f.BoolVar(&c.leaveRunning, "leave-running", false, "restart the container after checkpointing")
+	f.Var(newCheckpointCompressionValue(statefile.CompressionLevelFlateBestSpeed, &c.compression), "compression", "compress checkpoint image on disk. Values: none|flate-best-speed.")
 
 	// Unimplemented flags necessary for compatibility with docker.
 	var wp string
@@ -64,8 +69,7 @@ func (c *Checkpoint) SetFlags(f *flag.FlagSet) {
 }
 
 // Execute implements subcommands.Command.Execute.
-func (c *Checkpoint) Execute(_ context.Context, f *flag.FlagSet, args ...interface{}) subcommands.ExitStatus {
-
+func (c *Checkpoint) Execute(_ context.Context, f *flag.FlagSet, args ...any) subcommands.ExitStatus {
 	if f.NArg() != 1 {
 		f.Usage()
 		return subcommands.ExitUsageError
@@ -73,19 +77,19 @@ func (c *Checkpoint) Execute(_ context.Context, f *flag.FlagSet, args ...interfa
 
 	id := f.Arg(0)
 	conf := args[0].(*config.Config)
-	waitStatus := args[1].(*syscall.WaitStatus)
+	waitStatus := args[1].(*unix.WaitStatus)
 
 	cont, err := container.Load(conf.RootDir, container.FullID{ContainerID: id}, container.LoadOpts{})
 	if err != nil {
-		Fatalf("loading container: %v", err)
+		util.Fatalf("loading container: %v", err)
 	}
 
 	if c.imagePath == "" {
-		Fatalf("image-path flag must be provided")
+		util.Fatalf("image-path flag must be provided")
 	}
 
 	if err := os.MkdirAll(c.imagePath, 0755); err != nil {
-		Fatalf("making directories at path provided: %v", err)
+		util.Fatalf("making directories at path provided: %v", err)
 	}
 
 	fullImagePath := filepath.Join(c.imagePath, checkpointFileName)
@@ -93,12 +97,12 @@ func (c *Checkpoint) Execute(_ context.Context, f *flag.FlagSet, args ...interfa
 	// Create the image file and open for writing.
 	file, err := os.OpenFile(fullImagePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0644)
 	if err != nil {
-		Fatalf("os.OpenFile(%q) failed: %v", fullImagePath, err)
+		util.Fatalf("os.OpenFile(%q) failed: %v", fullImagePath, err)
 	}
 	defer file.Close()
 
-	if err := cont.Checkpoint(file); err != nil {
-		Fatalf("checkpoint failed: %v", err)
+	if err := cont.Checkpoint(file, statefile.Options{Compression: c.compression.Level()}); err != nil {
+		util.Fatalf("checkpoint failed: %v", err)
 	}
 
 	if !c.leaveRunning {
@@ -115,22 +119,22 @@ func (c *Checkpoint) Execute(_ context.Context, f *flag.FlagSet, args ...interfa
 	// Restore into new container with same ID.
 	bundleDir := cont.BundleDir
 	if bundleDir == "" {
-		Fatalf("setting bundleDir")
+		util.Fatalf("setting bundleDir")
 	}
 
 	spec, err := specutils.ReadSpec(bundleDir, conf)
 	if err != nil {
-		Fatalf("reading spec: %v", err)
+		util.Fatalf("reading spec: %v", err)
 	}
 
-	specutils.LogSpec(spec)
+	specutils.LogSpecDebug(spec, conf.OCISeccomp)
 
 	if cont.ConsoleSocket != "" {
 		log.Warningf("ignoring console socket since it cannot be restored")
 	}
 
 	if err := cont.Destroy(); err != nil {
-		Fatalf("destroying container: %v", err)
+		util.Fatalf("destroying container: %v", err)
 	}
 
 	contArgs := container.Args{
@@ -140,19 +144,56 @@ func (c *Checkpoint) Execute(_ context.Context, f *flag.FlagSet, args ...interfa
 	}
 	cont, err = container.New(conf, contArgs)
 	if err != nil {
-		Fatalf("restoring container: %v", err)
+		util.Fatalf("restoring container: %v", err)
 	}
 	defer cont.Destroy()
 
-	if err := cont.Restore(spec, conf, fullImagePath); err != nil {
-		Fatalf("starting container: %v", err)
+	if err := cont.Restore(conf, fullImagePath); err != nil {
+		util.Fatalf("starting container: %v", err)
 	}
 
 	ws, err := cont.Wait()
 	if err != nil {
-		Fatalf("Error waiting for container: %v", err)
+		util.Fatalf("Error waiting for container: %v", err)
 	}
 	*waitStatus = ws
 
 	return subcommands.ExitSuccess
+}
+
+// CheckpointCompression represents checkpoint image writer behavior. The
+// default behavior is to compress because the default behavior used to be to
+// always compress.
+type CheckpointCompression statefile.CompressionLevel
+
+func newCheckpointCompressionValue(val statefile.CompressionLevel, p *CheckpointCompression) *CheckpointCompression {
+	*p = CheckpointCompression(val)
+	return (*CheckpointCompression)(p)
+}
+
+// Set implements flag.Value.
+func (g *CheckpointCompression) Set(v string) error {
+	t, err := statefile.CompressionLevelFromString(v)
+	if err != nil {
+		return fmt.Errorf("invalid checkpoint compression type %q", v)
+	}
+
+	*g = CheckpointCompression(t)
+
+	return nil
+}
+
+// Get implements flag.Getter.
+func (g *CheckpointCompression) Get() any {
+	return *g
+}
+
+// String implements flag.Value.
+func (g CheckpointCompression) String() string {
+	return string(g)
+}
+
+// Level returns corresponding statefile.CompressionLevel value.
+func (g CheckpointCompression) Level() statefile.CompressionLevel {
+	return statefile.CompressionLevel(g)
 }

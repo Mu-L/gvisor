@@ -21,7 +21,7 @@
 package pagetables
 
 import (
-	"gvisor.dev/gvisor/pkg/usermem"
+	"gvisor.dev/gvisor/pkg/hostarch"
 )
 
 // PageTables is a set of page tables.
@@ -61,6 +61,7 @@ type PageTables struct {
 // Init initializes a set of PageTables.
 //
 // +checkescape:hard,stack
+//
 //go:nosplit
 func (p *PageTables) Init(allocator Allocator) {
 	p.Allocator = allocator
@@ -141,8 +142,9 @@ func (*mapVisitor) requiresSplit() bool { return true }
 // Precondition: addr & length must be page-aligned, their sum must not overflow.
 //
 // +checkescape:hard,stack
+//
 //go:nosplit
-func (p *PageTables) Map(addr usermem.Addr, length uintptr, opts MapOpts, physical uintptr) bool {
+func (p *PageTables) Map(addr hostarch.Addr, length uintptr, opts MapOpts, physical uintptr) bool {
 	if p.readOnlyShared {
 		panic("Should not modify read-only shared pagetables.")
 	}
@@ -197,8 +199,9 @@ func (v *unmapVisitor) visit(start uintptr, pte *PTE, align uintptr) bool {
 // Precondition: addr & length must be page-aligned, their sum must not overflow.
 //
 // +checkescape:hard,stack
+//
 //go:nosplit
-func (p *PageTables) Unmap(addr usermem.Addr, length uintptr) bool {
+func (p *PageTables) Unmap(addr hostarch.Addr, length uintptr) bool {
 	if p.readOnlyShared {
 		panic("Should not modify read-only shared pagetables.")
 	}
@@ -248,8 +251,9 @@ func (v *emptyVisitor) visit(start uintptr, pte *PTE, align uintptr) bool {
 // Precondition: addr & length must be page-aligned.
 //
 // +checkescape:hard,stack
+//
 //go:nosplit
-func (p *PageTables) IsEmpty(addr usermem.Addr, length uintptr) bool {
+func (p *PageTables) IsEmpty(addr hostarch.Addr, length uintptr) bool {
 	w := emptyWalker{
 		pageTables: p,
 	}
@@ -297,10 +301,11 @@ func (*lookupVisitor) requiresSplit() bool { return false }
 // Note that if size is zero, then no matching entry was found.
 //
 // +checkescape:hard,stack
+//
 //go:nosplit
-func (p *PageTables) Lookup(addr usermem.Addr, findFirst bool) (virtual usermem.Addr, physical, size uintptr, opts MapOpts) {
-	mask := uintptr(usermem.PageSize - 1)
-	addr &^= usermem.Addr(mask)
+func (p *PageTables) Lookup(addr hostarch.Addr, findFirst bool) (virtual hostarch.Addr, physical, size uintptr, opts MapOpts) {
+	mask := uintptr(hostarch.PageSize - 1)
+	addr &^= hostarch.Addr(mask)
 	w := lookupWalker{
 		pageTables: p,
 		visitor: lookupVisitor{
@@ -308,12 +313,12 @@ func (p *PageTables) Lookup(addr usermem.Addr, findFirst bool) (virtual usermem.
 			findFirst: findFirst,
 		},
 	}
-	end := ^usermem.Addr(0) &^ usermem.Addr(mask)
+	end := ^hostarch.Addr(0) &^ hostarch.Addr(mask)
 	if !findFirst {
 		end = addr + 1
 	}
 	w.iterateRange(uintptr(addr), uintptr(end))
-	return usermem.Addr(w.visitor.target), w.visitor.physical, w.visitor.size, w.visitor.opts
+	return hostarch.Addr(w.visitor.target), w.visitor.physical, w.visitor.size, w.visitor.opts
 }
 
 // MarkReadOnlyShared marks the pagetables read-only and can be shared.

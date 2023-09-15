@@ -46,21 +46,21 @@ const (
 // As per RFC 2710 section 3, MLD messages have the following format (MLD only
 // holds the bytes after the first four bytes in the diagram below):
 //
-//    0                   1                   2                   3
-//    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//   |     Type      |     Code      |          Checksum             |
-//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//   |     Maximum Response Delay    |          Reserved             |
-//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//   |                                                               |
-//   +                                                               +
-//   |                                                               |
-//   +                       Multicast Address                       +
-//   |                                                               |
-//   +                                                               +
-//   |                                                               |
-//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//	 0                   1                   2                   3
+//	 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+//	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//	|     Type      |     Code      |          Checksum             |
+//	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//	|     Maximum Response Delay    |          Reserved             |
+//	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//	|                                                               |
+//	+                                                               +
+//	|                                                               |
+//	+                       Multicast Address                       +
+//	|                                                               |
+//	+                                                               +
+//	|                                                               |
+//	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 type MLD []byte
 
 // MaximumResponseDelay returns the Maximum Response Delay.
@@ -92,12 +92,12 @@ func (m MLD) MulticastAddress() tcpip.Address {
 	//   In a Report or Done message, the Multicast Address field holds a
 	//   specific IPv6 multicast address to which the message sender is
 	//   listening or is ceasing to listen, respectively.
-	return tcpip.Address(m[mldMulticastAddressOffset:][:IPv6AddressSize])
+	return tcpip.AddrFrom16([16]byte(m[mldMulticastAddressOffset:][:IPv6AddressSize]))
 }
 
 // SetMulticastAddress sets the Multicast Address field.
 func (m MLD) SetMulticastAddress(multicastAddress tcpip.Address) {
-	if n := copy(m[mldMulticastAddressOffset:], multicastAddress); n != IPv6AddressSize {
+	if n := copy(m[mldMulticastAddressOffset:], multicastAddress.AsSlice()); n != IPv6AddressSize {
 		panic(fmt.Sprintf("copied %d bytes, expected to copy %d bytes", n, IPv6AddressSize))
 	}
 }

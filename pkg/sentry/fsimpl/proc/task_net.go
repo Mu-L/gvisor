@@ -23,6 +23,8 @@ import (
 
 	"gvisor.dev/gvisor/pkg/abi/linux"
 	"gvisor.dev/gvisor/pkg/context"
+	"gvisor.dev/gvisor/pkg/errors/linuxerr"
+	"gvisor.dev/gvisor/pkg/hostarch"
 	"gvisor.dev/gvisor/pkg/log"
 	"gvisor.dev/gvisor/pkg/sentry/fsimpl/kernfs"
 	"gvisor.dev/gvisor/pkg/sentry/inet"
@@ -32,9 +34,7 @@ import (
 	"gvisor.dev/gvisor/pkg/sentry/socket/unix"
 	"gvisor.dev/gvisor/pkg/sentry/socket/unix/transport"
 	"gvisor.dev/gvisor/pkg/sentry/vfs"
-	"gvisor.dev/gvisor/pkg/syserror"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
-	"gvisor.dev/gvisor/pkg/usermem"
 )
 
 func (fs *filesystem) newTaskNetDir(ctx context.Context, task *kernel.Task) kernfs.Inode {
@@ -43,7 +43,12 @@ func (fs *filesystem) newTaskNetDir(ctx context.Context, task *kernel.Task) kern
 	root := auth.NewRootCredentials(pidns.UserNamespace())
 
 	var contents map[string]kernfs.Inode
-	if stack := task.NetworkNamespace().Stack(); stack != nil {
+	var stack inet.Stack
+	if netns := task.GetNetworkNamespace(); netns != nil {
+		netns.DecRef(ctx)
+		stack = netns.Stack()
+	}
+	if stack != nil {
 		const (
 			arp       = "IP address       HW type     Flags       HW address            Mask     Device\n"
 			netlink   = "sk       Eth Pid    Groups   Rmem     Wmem     Dump     Locks     Drops     Inode\n"
@@ -206,17 +211,17 @@ var _ dynamicInode = (*netUnixData)(nil)
 func (n *netUnixData) Generate(ctx context.Context, buf *bytes.Buffer) error {
 	buf.WriteString("Num       RefCount Protocol Flags    Type St Inode Path\n")
 	for _, se := range n.kernel.ListSockets() {
-		s := se.SockVFS2
+		s := se.Sock
 		if !s.TryIncRef() {
 			// Racing with socket destruction, this is ok.
 			continue
 		}
-		if family, _, _ := s.Impl().(socket.SocketVFS2).Type(); family != linux.AF_UNIX {
+		if family, _, _ := s.Impl().(socket.Socket).Type(); family != linux.AF_UNIX {
 			s.DecRef(ctx)
 			// Not a unix socket.
 			continue
 		}
-		sops := s.Impl().(*unix.SocketVFS2)
+		sops := s.Impl().(*unix.Socket)
 
 		addr, err := sops.Endpoint().GetLocalAddress()
 		if err != nil {
@@ -226,11 +231,13 @@ func (n *netUnixData) Generate(ctx context.Context, buf *bytes.Buffer) error {
 
 		sockFlags := 0
 		if ce, ok := sops.Endpoint().(transport.ConnectingEndpoint); ok {
-			if ce.Listening() {
+			ce.Lock()
+			if ce.ListeningLocked() {
 				// For unix domain sockets, linux reports a single flag
 				// value if the socket is listening, of __SO_ACCEPTCON.
 				sockFlags = linux.SO_ACCEPTCON
 			}
+			ce.Unlock()
 		}
 
 		// Get inode number.
@@ -261,13 +268,13 @@ func (n *netUnixData) Generate(ctx context.Context, buf *bytes.Buffer) error {
 		//
 		// For now, we always redact this pointer.
 		fmt.Fprintf(buf, "%#016p: %08X %08X %08X %04X %02X %8d",
-			(*unix.SocketOperations)(nil), // Num, pointer to kernel socket struct.
-			s.ReadRefs()-1,                // RefCount, don't count our own ref.
-			0,                             // Protocol, always 0 for UDS.
-			sockFlags,                     // Flags.
-			sops.Endpoint().Type(),        // Type.
-			sops.State(),                  // State.
-			ino,                           // Inode.
+			(*unix.Socket)(nil),    // Num, pointer to kernel socket struct.
+			s.ReadRefs()-1,         // RefCount, don't count our own ref.
+			0,                      // Protocol, always 0 for UDS.
+			sockFlags,              // Flags.
+			sops.Endpoint().Type(), // Type.
+			sops.State(),           // State.
+			ino,                    // Inode.
 		)
 
 		// Path
@@ -295,7 +302,7 @@ func networkToHost16(n uint16) uint16 {
 	// binary.BigEndian.Uint16() require a read of binary.BigEndian and an
 	// interface method call, defeating inlining.
 	buf := [2]byte{byte(n >> 8 & 0xff), byte(n & 0xff)}
-	return usermem.ByteOrder.Uint16(buf[:])
+	return hostarch.ByteOrder.Uint16(buf[:])
 }
 
 func writeInetAddr(w io.Writer, family int, i linux.SockAddr) {
@@ -317,14 +324,14 @@ func writeInetAddr(w io.Writer, family int, i linux.SockAddr) {
 		// __be32 which is a typedef for an unsigned int, and is printed with
 		// %X. This means that for a little-endian machine, Linux prints the
 		// least-significant byte of the address first. To emulate this, we first
-		// invert the byte order for the address using usermem.ByteOrder.Uint32,
+		// invert the byte order for the address using hostarch.ByteOrder.Uint32,
 		// which makes it have the equivalent encoding to a __be32 on a little
 		// endian machine. Note that this operation is a no-op on a big endian
 		// machine. Then similar to Linux, we format it with %X, which will print
 		// the most-significant byte of the __be32 address first, which is now
 		// actually the least-significant byte of the original address in
 		// linux.SockAddrInet.Addr on little endian machines, due to the conversion.
-		addr := usermem.ByteOrder.Uint32(a.Addr[:])
+		addr := hostarch.ByteOrder.Uint32(a.Addr[:])
 
 		fmt.Fprintf(w, "%08X:%04X ", addr, port)
 	case linux.AF_INET6:
@@ -334,10 +341,10 @@ func writeInetAddr(w io.Writer, family int, i linux.SockAddr) {
 		}
 
 		port := networkToHost16(a.Port)
-		addr0 := usermem.ByteOrder.Uint32(a.Addr[0:4])
-		addr1 := usermem.ByteOrder.Uint32(a.Addr[4:8])
-		addr2 := usermem.ByteOrder.Uint32(a.Addr[8:12])
-		addr3 := usermem.ByteOrder.Uint32(a.Addr[12:16])
+		addr0 := hostarch.ByteOrder.Uint32(a.Addr[0:4])
+		addr1 := hostarch.ByteOrder.Uint32(a.Addr[4:8])
+		addr2 := hostarch.ByteOrder.Uint32(a.Addr[8:12])
+		addr3 := hostarch.ByteOrder.Uint32(a.Addr[12:16])
 		fmt.Fprintf(w, "%08X%08X%08X%08X:%04X ", addr0, addr1, addr2, addr3, port)
 	}
 }
@@ -349,12 +356,12 @@ func commonGenerateTCP(ctx context.Context, buf *bytes.Buffer, k *kernel.Kernel,
 	t := kernel.TaskFromContext(ctx)
 
 	for _, se := range k.ListSockets() {
-		s := se.SockVFS2
+		s := se.Sock
 		if !s.TryIncRef() {
 			// Racing with socket destruction, this is ok.
 			continue
 		}
-		sops, ok := s.Impl().(socket.SocketVFS2)
+		sops, ok := s.Impl().(socket.Socket)
 		if !ok {
 			panic(fmt.Sprintf("Found non-socket file in socket table: %+v", s))
 		}
@@ -514,12 +521,12 @@ func (d *netUDPData) Generate(ctx context.Context, buf *bytes.Buffer) error {
 	buf.WriteString("  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops             \n")
 
 	for _, se := range d.kernel.ListSockets() {
-		s := se.SockVFS2
+		s := se.Sock
 		if !s.TryIncRef() {
 			// Racing with socket destruction, this is ok.
 			continue
 		}
-		sops, ok := s.Impl().(socket.SocketVFS2)
+		sops, ok := s.Impl().(socket.Socket)
 		if !ok {
 			panic(fmt.Sprintf("Found non-socket file in socket table: %+v", s))
 		}
@@ -648,7 +655,7 @@ var snmp = []snmpLine{
 	},
 }
 
-func toSlice(a interface{}) []uint64 {
+func toSlice(a any) []uint64 {
 	v := reflect.Indirect(reflect.ValueOf(a))
 	return v.Slice(0, v.Len()).Interface().([]uint64)
 }
@@ -663,7 +670,7 @@ func sprintSlice(s []uint64) string {
 
 // Generate implements vfs.DynamicBytesSource.Generate.
 func (d *netSnmpData) Generate(ctx context.Context, buf *bytes.Buffer) error {
-	types := []interface{}{
+	types := []any{
 		&inet.StatSNMPIP{},
 		&inet.StatSNMPICMP{},
 		nil, // TODO(gvisor.dev/issue/628): Support IcmpMsg stats.
@@ -679,7 +686,7 @@ func (d *netSnmpData) Generate(ctx context.Context, buf *bytes.Buffer) error {
 			continue
 		}
 		if err := d.stack.Statistics(stat, line.prefix); err != nil {
-			if err == syserror.EOPNOTSUPP {
+			if linuxerr.Equals(linuxerr.EOPNOTSUPP, err) {
 				log.Infof("Failed to retrieve %s of /proc/net/snmp: %v", line.prefix, err)
 			} else {
 				log.Warningf("Failed to retrieve %s of /proc/net/snmp: %v", line.prefix, err)
@@ -739,10 +746,10 @@ func (d *netRouteData) Generate(ctx context.Context, buf *bytes.Buffer) error {
 		)
 		if len(rt.GatewayAddr) == header.IPv4AddressSize {
 			flags |= linux.RTF_GATEWAY
-			gw = usermem.ByteOrder.Uint32(rt.GatewayAddr)
+			gw = hostarch.ByteOrder.Uint32(rt.GatewayAddr)
 		}
 		if len(rt.DstAddr) == header.IPv4AddressSize {
-			prefix = usermem.ByteOrder.Uint32(rt.DstAddr)
+			prefix = hostarch.ByteOrder.Uint32(rt.DstAddr)
 		}
 		l := fmt.Sprintf(
 			"%s\t%08X\t%08X\t%04X\t%d\t%d\t%d\t%08X\t%d\t%d\t%d",

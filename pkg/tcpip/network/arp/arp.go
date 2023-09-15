@@ -20,11 +20,10 @@ package arp
 import (
 	"fmt"
 	"reflect"
-	"sync/atomic"
 
+	"gvisor.dev/gvisor/pkg/atomicbitops"
 	"gvisor.dev/gvisor/pkg/sync"
 	"gvisor.dev/gvisor/pkg/tcpip"
-	"gvisor.dev/gvisor/pkg/tcpip/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/header/parse"
 	"gvisor.dev/gvisor/pkg/tcpip/network/internal/ip"
@@ -38,6 +37,7 @@ const (
 
 var _ stack.DuplicateAddressDetector = (*endpoint)(nil)
 var _ stack.LinkAddressResolver = (*endpoint)(nil)
+var _ ip.DADProtocol = (*endpoint)(nil)
 
 // ARP endpoints need to implement stack.NetworkEndpoint because the stack
 // considers the layer above the link-layer a network layer; the only
@@ -49,32 +49,30 @@ type endpoint struct {
 	protocol *protocol
 
 	// enabled is set to 1 when the NIC is enabled and 0 when it is disabled.
-	//
-	// Must be accessed using atomic operations.
-	enabled uint32
+	enabled atomicbitops.Uint32
 
 	nic   stack.NetworkInterface
 	stats sharedStats
 
-	mu struct {
-		sync.Mutex
+	// mu protects annotated fields below.
+	mu sync.Mutex
 
-		dad ip.DAD
-	}
+	// +checklocks:mu
+	dad ip.DAD
 }
 
 // CheckDuplicateAddress implements stack.DuplicateAddressDetector.
 func (e *endpoint) CheckDuplicateAddress(addr tcpip.Address, h stack.DADCompletionHandler) stack.DADCheckAddressDisposition {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.mu.dad.CheckDuplicateAddressLocked(addr, h)
+	return e.dad.CheckDuplicateAddressLocked(addr, h)
 }
 
 // SetDADConfigurations implements stack.DuplicateAddressDetector.
 func (e *endpoint) SetDADConfigurations(c stack.DADConfigurations) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.mu.dad.SetConfigsLocked(c)
+	e.dad.SetConfigsLocked(c)
 }
 
 // DuplicateAddressProtocol implements stack.DuplicateAddressDetector.
@@ -82,7 +80,8 @@ func (*endpoint) DuplicateAddressProtocol() tcpip.NetworkProtocolNumber {
 	return header.IPv4ProtocolNumber
 }
 
-func (e *endpoint) SendDADMessage(addr tcpip.Address) tcpip.Error {
+// SendDADMessage implements ip.DADProtocol.
+func (e *endpoint) SendDADMessage(addr tcpip.Address, _ []byte) tcpip.Error {
 	return e.sendARPRequest(header.IPv4Any, addr, header.EthernetBroadcastAddress)
 }
 
@@ -102,15 +101,15 @@ func (e *endpoint) Enabled() bool {
 // isEnabled returns true if the endpoint is enabled, regardless of the
 // enabled status of the NIC.
 func (e *endpoint) isEnabled() bool {
-	return atomic.LoadUint32(&e.enabled) == 1
+	return e.enabled.Load() == 1
 }
 
 // setEnabled sets the enabled status for the endpoint.
 func (e *endpoint) setEnabled(v bool) {
 	if v {
-		atomic.StoreUint32(&e.enabled, 1)
+		e.enabled.Store(1)
 	} else {
-		atomic.StoreUint32(&e.enabled, 0)
+		e.enabled.Store(0)
 	}
 }
 
@@ -134,7 +133,7 @@ func (e *endpoint) MaxHeaderLength() uint16 {
 
 func (*endpoint) Close() {}
 
-func (*endpoint) WritePacket(*stack.Route, *stack.GSO, stack.NetworkHeaderParams, *stack.PacketBuffer) tcpip.Error {
+func (*endpoint) WritePacket(*stack.Route, stack.NetworkHeaderParams, stack.PacketBufferPtr) tcpip.Error {
 	return &tcpip.ErrNotSupported{}
 }
 
@@ -143,16 +142,11 @@ func (*endpoint) NetworkProtocolNumber() tcpip.NetworkProtocolNumber {
 	return ProtocolNumber
 }
 
-// WritePackets implements stack.NetworkEndpoint.WritePackets.
-func (*endpoint) WritePackets(*stack.Route, *stack.GSO, stack.PacketBufferList, stack.NetworkHeaderParams) (int, tcpip.Error) {
-	return 0, &tcpip.ErrNotSupported{}
-}
-
-func (*endpoint) WriteHeaderIncludedPacket(*stack.Route, *stack.PacketBuffer) tcpip.Error {
+func (*endpoint) WriteHeaderIncludedPacket(*stack.Route, stack.PacketBufferPtr) tcpip.Error {
 	return &tcpip.ErrNotSupported{}
 }
 
-func (e *endpoint) HandlePacket(pkt *stack.PacketBuffer) {
+func (e *endpoint) HandlePacket(pkt stack.PacketBufferPtr) {
 	stats := e.stats.arp
 	stats.packetsReceived.Increment()
 
@@ -166,7 +160,7 @@ func (e *endpoint) HandlePacket(pkt *stack.PacketBuffer) {
 		return
 	}
 
-	h := header.ARP(pkt.NetworkHeader().View())
+	h := header.ARP(pkt.NetworkHeader().Slice())
 	if !h.IsValid() {
 		stats.malformedPacketsReceived.Increment()
 		return
@@ -175,14 +169,14 @@ func (e *endpoint) HandlePacket(pkt *stack.PacketBuffer) {
 	switch h.Op() {
 	case header.ARPRequest:
 		stats.requestsReceived.Increment()
-		localAddr := tcpip.Address(h.ProtocolAddressTarget())
+		localAddr := tcpip.AddrFrom4Slice(h.ProtocolAddressTarget())
 
 		if !e.nic.CheckLocalAddress(header.IPv4ProtocolNumber, localAddr) {
 			stats.requestsReceivedUnknownTargetAddress.Increment()
 			return // we have no useful answer, ignore the request
 		}
 
-		remoteAddr := tcpip.Address(h.ProtocolAddressSender())
+		remoteAddr := tcpip.AddrFrom4Slice(h.ProtocolAddressSender())
 		remoteLinkAddr := tcpip.LinkAddress(h.HardwareAddressSender())
 
 		switch err := e.nic.HandleNeighborProbe(header.IPv4ProtocolNumber, remoteAddr, remoteLinkAddr); err.(type) {
@@ -196,6 +190,7 @@ func (e *endpoint) HandlePacket(pkt *stack.PacketBuffer) {
 		respPkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 			ReserveHeaderBytes: int(e.nic.MaxHeaderLength()) + header.ARPSize,
 		})
+		defer respPkt.DecRef()
 		packet := header.ARP(respPkt.NetworkHeader().Push(header.ARPSize))
 		respPkt.NetworkProtocolNumber = ProtocolNumber
 		packet.SetIPv4OverEthernet()
@@ -220,7 +215,7 @@ func (e *endpoint) HandlePacket(pkt *stack.PacketBuffer) {
 		//
 		//   Send the packet to the (new) target hardware address on the same
 		//   hardware on which the request was received.
-		if err := e.nic.WritePacketToRemote(tcpip.LinkAddress(origSender), nil /* gso */, ProtocolNumber, respPkt); err != nil {
+		if err := e.nic.WritePacketToRemote(tcpip.LinkAddress(origSender), respPkt); err != nil {
 			stats.outgoingRepliesDropped.Increment()
 		} else {
 			stats.outgoingRepliesSent.Increment()
@@ -228,19 +223,18 @@ func (e *endpoint) HandlePacket(pkt *stack.PacketBuffer) {
 
 	case header.ARPReply:
 		stats.repliesReceived.Increment()
-		addr := tcpip.Address(h.ProtocolAddressSender())
+		addr := tcpip.AddrFrom4Slice(h.ProtocolAddressSender())
 		linkAddr := tcpip.LinkAddress(h.HardwareAddressSender())
 
 		e.mu.Lock()
-		e.mu.dad.StopLocked(addr, false /* aborted */)
+		e.dad.StopLocked(addr, &stack.DADDupAddrDetected{HolderLinkAddress: linkAddr})
 		e.mu.Unlock()
 
-		// The solicited, override, and isRouter flags are not available for ARP;
-		// they are only available for IPv6 Neighbor Advertisements.
 		switch err := e.nic.HandleNeighborConfirmation(header.IPv4ProtocolNumber, addr, linkAddr, stack.ReachabilityConfirmationFlags{
-			// Solicited and unsolicited (also referred to as gratuitous) ARP Replies
-			// are handled equivalently to a solicited Neighbor Advertisement.
-			Solicited: true,
+			// Only unicast ARP replies are considered solicited. Broadcast replies
+			// are gratuitous ARP replies and should not move neighbor entries to the
+			// reachable state.
+			Solicited: pkt.PktType == tcpip.PacketHost,
 			// If a different link address is received than the one cached, the entry
 			// should always go to Stale.
 			Override: false,
@@ -270,23 +264,25 @@ type protocol struct {
 
 func (p *protocol) Number() tcpip.NetworkProtocolNumber { return ProtocolNumber }
 func (p *protocol) MinimumPacketSize() int              { return header.ARPSize }
-func (p *protocol) DefaultPrefixLen() int               { return 0 }
 
-func (*protocol) ParseAddresses(buffer.View) (src, dst tcpip.Address) {
-	return "", ""
+func (*protocol) ParseAddresses([]byte) (src, dst tcpip.Address) {
+	return tcpip.Address{}, tcpip.Address{}
 }
 
-func (p *protocol) NewEndpoint(nic stack.NetworkInterface, dispatcher stack.TransportDispatcher) stack.NetworkEndpoint {
+func (p *protocol) NewEndpoint(nic stack.NetworkInterface, _ stack.TransportDispatcher) stack.NetworkEndpoint {
 	e := &endpoint{
 		protocol: p,
 		nic:      nic,
 	}
 
 	e.mu.Lock()
-	e.mu.dad.Init(&e.mu, p.options.DADConfigs, ip.DADOptions{
-		Clock:    p.stack.Clock(),
-		Protocol: e,
-		NICID:    nic.ID(),
+	e.dad.Init(&e.mu, p.options.DADConfigs, ip.DADOptions{
+		Clock:     p.stack.Clock(),
+		SecureRNG: p.stack.SecureRNG(),
+		// ARP does not support sending nonce values.
+		NonceSize: 0,
+		Protocol:  e,
+		NICID:     nic.ID(),
 	})
 	e.mu.Unlock()
 
@@ -305,21 +301,19 @@ func (*endpoint) LinkAddressProtocol() tcpip.NetworkProtocolNumber {
 
 // LinkAddressRequest implements stack.LinkAddressResolver.LinkAddressRequest.
 func (e *endpoint) LinkAddressRequest(targetAddr, localAddr tcpip.Address, remoteLinkAddr tcpip.LinkAddress) tcpip.Error {
-	nicID := e.nic.ID()
-
 	stats := e.stats.arp
 
 	if len(remoteLinkAddr) == 0 {
 		remoteLinkAddr = header.EthernetBroadcastAddress
 	}
 
-	if len(localAddr) == 0 {
-		addr, ok := e.protocol.stack.GetMainNICAddress(nicID, header.IPv4ProtocolNumber)
-		if !ok {
-			return &tcpip.ErrUnknownNICID{}
+	if localAddr.BitLen() == 0 {
+		addr, err := e.nic.PrimaryAddress(header.IPv4ProtocolNumber)
+		if err != nil {
+			return err
 		}
 
-		if len(addr.Address) == 0 {
+		if addr.Address.BitLen() == 0 {
 			stats.outgoingRequestInterfaceHasNoLocalAddressErrors.Increment()
 			return &tcpip.ErrNetworkUnreachable{}
 		}
@@ -337,6 +331,7 @@ func (e *endpoint) sendARPRequest(localAddr, targetAddr tcpip.Address, remoteLin
 	pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 		ReserveHeaderBytes: int(e.MaxHeaderLength()),
 	})
+	defer pkt.DecRef()
 	h := header.ARP(pkt.NetworkHeader().Push(header.ARPSize))
 	pkt.NetworkProtocolNumber = ProtocolNumber
 	h.SetIPv4OverEthernet()
@@ -344,15 +339,15 @@ func (e *endpoint) sendARPRequest(localAddr, targetAddr tcpip.Address, remoteLin
 	// TODO(gvisor.dev/issue/4582): check copied length once TAP devices have a
 	// link address.
 	_ = copy(h.HardwareAddressSender(), e.nic.LinkAddress())
-	if n := copy(h.ProtocolAddressSender(), localAddr); n != header.IPv4AddressSize {
+	if n := copy(h.ProtocolAddressSender(), localAddr.AsSlice()); n != header.IPv4AddressSize {
 		panic(fmt.Sprintf("copied %d bytes, expected %d bytes", n, header.IPv4AddressSize))
 	}
-	if n := copy(h.ProtocolAddressTarget(), targetAddr); n != header.IPv4AddressSize {
+	if n := copy(h.ProtocolAddressTarget(), targetAddr.AsSlice()); n != header.IPv4AddressSize {
 		panic(fmt.Sprintf("copied %d bytes, expected %d bytes", n, header.IPv4AddressSize))
 	}
 
 	stats := e.stats.arp
-	if err := e.nic.WritePacketToRemote(remoteLinkAddr, nil /* gso */, ProtocolNumber, pkt); err != nil {
+	if err := e.nic.WritePacketToRemote(remoteLinkAddr, pkt); err != nil {
 		stats.outgoingRequestsDropped.Increment()
 		return err
 	}
@@ -388,7 +383,7 @@ func (*protocol) Close() {}
 func (*protocol) Wait() {}
 
 // Parse implements stack.NetworkProtocol.Parse.
-func (*protocol) Parse(pkt *stack.PacketBuffer) (proto tcpip.TransportProtocolNumber, hasTransportHdr bool, ok bool) {
+func (*protocol) Parse(pkt stack.PacketBufferPtr) (proto tcpip.TransportProtocolNumber, hasTransportHdr bool, ok bool) {
 	return 0, false, parse.ARP(pkt)
 }
 

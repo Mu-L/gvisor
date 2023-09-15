@@ -12,23 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build linux && (amd64 || arm64)
 // +build linux
 // +build amd64 arm64
 
 package ptrace
 
 import (
-	"syscall"
 	"unsafe"
 
+	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/abi/linux"
 )
 
 // unmaskAllSignals unmasks all signals on the current thread.
 //
+//go:norace
 //go:nosplit
-func unmaskAllSignals() syscall.Errno {
+func unmaskAllSignals() unix.Errno {
 	var set linux.SignalSet
-	_, _, errno := syscall.RawSyscall6(syscall.SYS_RT_SIGPROCMASK, linux.SIG_SETMASK, uintptr(unsafe.Pointer(&set)), 0, linux.SignalSetSize, 0, 0)
+	_, _, errno := unix.RawSyscall6(unix.SYS_RT_SIGPROCMASK, linux.SIG_SETMASK, uintptr(unsafe.Pointer(&set)), 0, linux.SignalSetSize, 0, 0)
 	return errno
 }

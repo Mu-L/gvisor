@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build arm64
 // +build arm64
 
 package ring0
@@ -30,6 +31,9 @@ func FlushTlbByVA(addr uintptr)
 
 // FlushTlbByASID invalidates tlb by ASID/Inner-Shareable.
 func FlushTlbByASID(asid uintptr)
+
+// LocalFlushTlbByASID invalidates tlb by ASID.
+func LocalFlushTlbByASID(asid uintptr)
 
 // FlushTlbAll invalidates all tlb.
 func FlushTlbAll()
@@ -62,12 +66,17 @@ func LoadFloatingPoint(*byte)
 // SaveFloatingPoint saves floating point state.
 func SaveFloatingPoint(*byte)
 
+// FPSIMDDisableTrap disables fpsimd.
 func FPSIMDDisableTrap()
 
-// DisableVFP disables fpsimd.
+// FPSIMDEnableTrap enables fpsimd.
 func FPSIMDEnableTrap()
 
 // Init sets function pointers based on architectural features.
 //
 // This must be called prior to using ring0.
 func Init() {}
+
+// InitDefault calls Init with default parameters.
+// On ARM, this is not much.
+func InitDefault() {}

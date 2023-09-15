@@ -17,12 +17,11 @@ package usage
 import (
 	"fmt"
 	"os"
-	"sync/atomic"
-	"syscall"
 
+	"golang.org/x/sys/unix"
+	"gvisor.dev/gvisor/pkg/atomicbitops"
 	"gvisor.dev/gvisor/pkg/bits"
 	"gvisor.dev/gvisor/pkg/memutil"
-	"gvisor.dev/gvisor/pkg/sync"
 )
 
 // MemoryKind represents a type of memory used by the application.
@@ -76,16 +75,97 @@ const (
 	Mapped
 )
 
-// MemoryStats tracks application memory usage in bytes. All fields correspond to the
+// memoryStats tracks application memory usage in bytes. All fields correspond to the
 // memory category with the same name. This object is thread-safe if accessed
 // through the provided methods. The public fields may be safely accessed
 // directly on a copy of the object obtained from Memory.Copy().
+type memoryStats struct {
+	System    atomicbitops.Uint64
+	Anonymous atomicbitops.Uint64
+	PageCache atomicbitops.Uint64
+	Tmpfs     atomicbitops.Uint64
+	Mapped    atomicbitops.Uint64
+	Ramdiskfs atomicbitops.Uint64
+}
+
+// incLocked adds a usage of 'val' bytes from memory category 'kind'.
+//
+// Precondition: must be called when locked.
+func (ms *memoryStats) incLocked(val uint64, kind MemoryKind) {
+	switch kind {
+	case System:
+		ms.System.Add(val)
+	case Anonymous:
+		ms.Anonymous.Add(val)
+	case PageCache:
+		ms.PageCache.Add(val)
+	case Mapped:
+		ms.Mapped.Add(val)
+	case Tmpfs:
+		ms.Tmpfs.Add(val)
+	case Ramdiskfs:
+		ms.Ramdiskfs.Add(val)
+	default:
+		panic(fmt.Sprintf("invalid memory kind: %v", kind))
+	}
+}
+
+// decLocked removes a usage of 'val' bytes from memory category 'kind'.
+//
+// Precondition: must be called when locked.
+func (ms *memoryStats) decLocked(val uint64, kind MemoryKind) {
+	switch kind {
+	case System:
+		ms.System.Add(^(val - 1))
+	case Anonymous:
+		ms.Anonymous.Add(^(val - 1))
+	case PageCache:
+		ms.PageCache.Add(^(val - 1))
+	case Mapped:
+		ms.Mapped.Add(^(val - 1))
+	case Tmpfs:
+		ms.Tmpfs.Add(^(val - 1))
+	case Ramdiskfs:
+		ms.Ramdiskfs.Add(^(val - 1))
+	default:
+		panic(fmt.Sprintf("invalid memory kind: %v", kind))
+	}
+}
+
+// totalLocked returns a total usage.
+//
+// Precondition: must be called when locked.
+func (ms *memoryStats) totalLocked() (total uint64) {
+	total += ms.System.RacyLoad()
+	total += ms.Anonymous.RacyLoad()
+	total += ms.PageCache.RacyLoad()
+	total += ms.Mapped.RacyLoad()
+	total += ms.Tmpfs.RacyLoad()
+	total += ms.Ramdiskfs.RacyLoad()
+	return
+}
+
+// copyLocked returns a copy of the structure.
+//
+// Precondition: must be called when locked.
+func (ms *memoryStats) copyLocked() MemoryStats {
+	return MemoryStats{
+		System:    ms.System.RacyLoad(),
+		Anonymous: ms.Anonymous.RacyLoad(),
+		PageCache: ms.PageCache.RacyLoad(),
+		Tmpfs:     ms.Tmpfs.RacyLoad(),
+		Mapped:    ms.Mapped.RacyLoad(),
+		Ramdiskfs: ms.Ramdiskfs.RacyLoad(),
+	}
+}
+
+// MemoryStats tracks application memory usage in bytes. All fields correspond
+// to the memory category with the same name.
 type MemoryStats struct {
 	System    uint64
 	Anonymous uint64
 	PageCache uint64
 	Tmpfs     uint64
-	// Lazily updated based on the value in RTMapped.
 	Mapped    uint64
 	Ramdiskfs uint64
 }
@@ -102,19 +182,21 @@ type MemoryStats struct {
 // initially zeroed. Any added field will be ignored by an older API and will be
 // zero if read by a newer API.
 type RTMemoryStats struct {
-	RTMapped uint64
+	RTMapped atomicbitops.Uint64
 }
 
 // MemoryLocked is Memory with access methods.
 type MemoryLocked struct {
-	mu sync.RWMutex
-	// MemoryStats records the memory stats.
-	MemoryStats
+	mu memoryMutex
+	// memoryStats records the memory stats.
+	memoryStats
 	// RTMemoryStats records the memory stats that need to be exposed through
 	// shared page.
 	*RTMemoryStats
 	// File is the backing file storing the memory stats.
 	File *os.File
+	// MemCgIDToMemStats is the map of cgroup ids to memory stats.
+	MemCgIDToMemStats map[uint32]*memoryStats
 }
 
 // Init initializes global 'MemoryAccounting'.
@@ -132,14 +214,15 @@ func Init() error {
 	// always be the case for a newly mapped page from /dev/shm. If we obtain
 	// the shared memory through some other means in the future, we may have to
 	// explicitly zero the page.
-	mmap, err := syscall.Mmap(int(file.Fd()), 0, int(RTMemoryStatsSize), syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
+	mmap, err := memutil.MapFile(0, RTMemoryStatsSize, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED, file.Fd(), 0)
 	if err != nil {
 		return fmt.Errorf("error mapping usage file: %v", err)
 	}
 
 	MemoryAccounting = &MemoryLocked{
-		File:          file,
-		RTMemoryStats: RTMemoryStatsPointer(mmap),
+		File:              file,
+		RTMemoryStats:     RTMemoryStatsPointer(mmap),
+		MemCgIDToMemStats: make(map[uint32]*memoryStats),
 	}
 	return nil
 }
@@ -151,85 +234,78 @@ func Init() error {
 // resident.
 var MemoryAccounting *MemoryLocked
 
-func (m *MemoryLocked) incLocked(val uint64, kind MemoryKind) {
-	switch kind {
-	case System:
-		atomic.AddUint64(&m.System, val)
-	case Anonymous:
-		atomic.AddUint64(&m.Anonymous, val)
-	case PageCache:
-		atomic.AddUint64(&m.PageCache, val)
-	case Mapped:
-		atomic.AddUint64(&m.RTMapped, val)
-	case Tmpfs:
-		atomic.AddUint64(&m.Tmpfs, val)
-	case Ramdiskfs:
-		atomic.AddUint64(&m.Ramdiskfs, val)
-	default:
-		panic(fmt.Sprintf("invalid memory kind: %v", kind))
+func (m *MemoryLocked) incLockedPerCg(val uint64, kind MemoryKind, memCgID uint32) {
+	if _, ok := m.MemCgIDToMemStats[memCgID]; !ok {
+		m.MemCgIDToMemStats[memCgID] = &memoryStats{}
 	}
+
+	ms := m.MemCgIDToMemStats[memCgID]
+	ms.incLocked(val, kind)
 }
 
-// Inc adds an additional usage of 'val' bytes to memory category 'kind'.
+// Inc adds an additional usage of 'val' bytes to memory category 'kind' for a
+// cgroup with id 'memCgID'. If 'memCgID' is zero, the memory is accounted only
+// for the total memory usage.
 //
 // This method is thread-safe.
-func (m *MemoryLocked) Inc(val uint64, kind MemoryKind) {
-	m.mu.RLock()
+func (m *MemoryLocked) Inc(val uint64, kind MemoryKind, memCgID uint32) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.incLocked(val, kind)
-	m.mu.RUnlock()
-}
+	if memCgID != 0 {
+		m.incLockedPerCg(val, kind, memCgID)
+	}
 
-func (m *MemoryLocked) decLocked(val uint64, kind MemoryKind) {
-	switch kind {
-	case System:
-		atomic.AddUint64(&m.System, ^(val - 1))
-	case Anonymous:
-		atomic.AddUint64(&m.Anonymous, ^(val - 1))
-	case PageCache:
-		atomic.AddUint64(&m.PageCache, ^(val - 1))
-	case Mapped:
-		atomic.AddUint64(&m.RTMapped, ^(val - 1))
-	case Tmpfs:
-		atomic.AddUint64(&m.Tmpfs, ^(val - 1))
-	case Ramdiskfs:
-		atomic.AddUint64(&m.Ramdiskfs, ^(val - 1))
-	default:
-		panic(fmt.Sprintf("invalid memory kind: %v", kind))
+	// If the memory category is 'Mapped', update RTMapped.
+	if kind == Mapped {
+		m.RTMapped.Add(val)
 	}
 }
 
-// Dec remove a usage of 'val' bytes from memory category 'kind'.
-//
-// This method is thread-safe.
-func (m *MemoryLocked) Dec(val uint64, kind MemoryKind) {
-	m.mu.RLock()
-	m.decLocked(val, kind)
-	m.mu.RUnlock()
+func (m *MemoryLocked) decLockedPerCg(val uint64, kind MemoryKind, memCgID uint32) {
+	if _, ok := m.MemCgIDToMemStats[memCgID]; !ok {
+		panic(fmt.Sprintf("invalid memory cgroup id: %v", memCgID))
+	}
+
+	ms := m.MemCgIDToMemStats[memCgID]
+	ms.decLocked(val, kind)
 }
 
-// Move moves a usage of 'val' bytes from 'from' to 'to'.
+// Dec removes a usage of 'val' bytes from memory category 'kind' for a cgroup
+// with id 'memCgID'. If 'memCgID' is zero, the memory is removed only from the
+// total usage.
 //
 // This method is thread-safe.
-func (m *MemoryLocked) Move(val uint64, to MemoryKind, from MemoryKind) {
-	m.mu.RLock()
-	// Just call decLocked and incLocked directly. We held the RLock to
+func (m *MemoryLocked) Dec(val uint64, kind MemoryKind, memCgID uint32) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.decLocked(val, kind)
+	if memCgID != 0 {
+		m.decLockedPerCg(val, kind, memCgID)
+	}
+
+	// If the memory category is 'Mapped', update RTMapped.
+	if kind == Mapped {
+		m.RTMapped.Add(^(val - 1))
+	}
+}
+
+// Move moves a usage of 'val' bytes from 'from' to 'to' for a cgroup with
+// id 'memCgID'.
+//
+// This method is thread-safe.
+func (m *MemoryLocked) Move(val uint64, to MemoryKind, from MemoryKind, memCgID uint32) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Just call decLocked and incLocked directly. We held the Lock to
 	// protect against concurrent callers to Total().
 	m.decLocked(val, from)
 	m.incLocked(val, to)
-	m.mu.RUnlock()
-}
 
-// totalLocked returns a total usage.
-//
-// Precondition: must be called when locked.
-func (m *MemoryLocked) totalLocked() (total uint64) {
-	total += atomic.LoadUint64(&m.System)
-	total += atomic.LoadUint64(&m.Anonymous)
-	total += atomic.LoadUint64(&m.PageCache)
-	total += atomic.LoadUint64(&m.RTMapped)
-	total += atomic.LoadUint64(&m.Tmpfs)
-	total += atomic.LoadUint64(&m.Ramdiskfs)
-	return
+	if memCgID != 0 {
+		m.decLockedPerCg(val, from, memCgID)
+		m.incLockedPerCg(val, to, memCgID)
+	}
 }
 
 // Total returns a total memory usage.
@@ -241,20 +317,56 @@ func (m *MemoryLocked) Total() uint64 {
 	return m.totalLocked()
 }
 
+// TotalPerCg returns a total memory usage for a cgroup.
+//
+// This method is thread-safe.
+func (m *MemoryLocked) TotalPerCg(memCgID uint32) uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Total memory usage including the sentry memory.
+	if memCgID == 0 {
+		return m.totalLocked()
+	}
+	// Memory usage for all cgroups except sentry memory.
+	ms, ok := m.MemCgIDToMemStats[memCgID]
+	if !ok {
+		return 0
+	}
+	return ms.totalLocked()
+}
+
 // Copy returns a copy of the structure with a total.
 //
 // This method is thread-safe.
 func (m *MemoryLocked) Copy() (MemoryStats, uint64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	ms := m.MemoryStats
-	ms.Mapped = m.RTMapped
-	return ms, m.totalLocked()
+	return m.copyLocked(), m.totalLocked()
 }
 
-// These options control how much total memory the is reported to the application.
-// They may only be set before the application starts executing, and must not
-// be modified.
+// CopyPerCg returns a copy of the structure with a total for a cgroup.
+//
+// This method is thread-safe.
+func (m *MemoryLocked) CopyPerCg(memCgID uint32) (MemoryStats, uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Total memory usage including the sentry memory.
+	if memCgID == 0 {
+		return m.copyLocked(), m.totalLocked()
+	}
+	// Memory usage for all cgroups except sentry memory.
+	ms, ok := m.MemCgIDToMemStats[memCgID]
+	if !ok {
+		return MemoryStats{}, 0
+	}
+	return ms.copyLocked(), ms.totalLocked()
+}
+
+// These options control how much total memory the is reported to the
+// application. They may only be set before the application starts executing,
+// and must not be modified.
 var (
 	// MinimumTotalMemoryBytes is the minimum reported total system memory.
 	MinimumTotalMemoryBytes uint64 = 2 << 30 // 2 GB

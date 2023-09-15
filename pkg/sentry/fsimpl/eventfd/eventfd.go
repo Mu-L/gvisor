@@ -16,16 +16,18 @@
 package eventfd
 
 import (
+	"fmt"
 	"math"
 	"sync"
-	"syscall"
 
+	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/abi/linux"
 	"gvisor.dev/gvisor/pkg/context"
+	"gvisor.dev/gvisor/pkg/errors/linuxerr"
 	"gvisor.dev/gvisor/pkg/fdnotifier"
+	"gvisor.dev/gvisor/pkg/hostarch"
 	"gvisor.dev/gvisor/pkg/log"
 	"gvisor.dev/gvisor/pkg/sentry/vfs"
-	"gvisor.dev/gvisor/pkg/syserror"
 	"gvisor.dev/gvisor/pkg/usermem"
 	"gvisor.dev/gvisor/pkg/waiter"
 )
@@ -73,6 +75,7 @@ func New(ctx context.Context, vfsObj *vfs.VirtualFilesystem, initVal uint64, sem
 		UseDentryMetadata: true,
 		DenyPRead:         true,
 		DenyPWrite:        true,
+		DenySpliceIn:      true,
 	}); err != nil {
 		return nil, err
 	}
@@ -92,13 +95,13 @@ func (efd *EventFileDescription) HostFD() (int, error) {
 		flags |= linux.EFD_SEMAPHORE
 	}
 
-	fd, _, errno := syscall.Syscall(syscall.SYS_EVENTFD2, uintptr(efd.val), uintptr(flags), 0)
+	fd, _, errno := unix.Syscall(unix.SYS_EVENTFD2, uintptr(efd.val), uintptr(flags), 0)
 	if errno != 0 {
 		return -1, errno
 	}
 
 	if err := fdnotifier.AddFD(int32(fd), &efd.queue); err != nil {
-		if closeErr := syscall.Close(int(fd)); closeErr != nil {
+		if closeErr := unix.Close(int(fd)); closeErr != nil {
 			log.Warningf("close(%d) eventfd failed: %v", fd, closeErr)
 		}
 		return -1, err
@@ -114,7 +117,7 @@ func (efd *EventFileDescription) Release(context.Context) {
 	defer efd.mu.Unlock()
 	if efd.hostfd >= 0 {
 		fdnotifier.RemoveFD(int32(efd.hostfd))
-		if closeErr := syscall.Close(int(efd.hostfd)); closeErr != nil {
+		if closeErr := unix.Close(int(efd.hostfd)); closeErr != nil {
 			log.Warningf("close(%d) eventfd failed: %v", efd.hostfd, closeErr)
 		}
 		efd.hostfd = -1
@@ -124,7 +127,7 @@ func (efd *EventFileDescription) Release(context.Context) {
 // Read implements vfs.FileDescriptionImpl.Read.
 func (efd *EventFileDescription) Read(ctx context.Context, dst usermem.IOSequence, _ vfs.ReadOptions) (int64, error) {
 	if dst.NumBytes() < 8 {
-		return 0, syscall.EINVAL
+		return 0, unix.EINVAL
 	}
 	if err := efd.read(ctx, dst); err != nil {
 		return 0, err
@@ -135,7 +138,7 @@ func (efd *EventFileDescription) Read(ctx context.Context, dst usermem.IOSequenc
 // Write implements vfs.FileDescriptionImpl.Write.
 func (efd *EventFileDescription) Write(ctx context.Context, src usermem.IOSequence, _ vfs.WriteOptions) (int64, error) {
 	if src.NumBytes() < 8 {
-		return 0, syscall.EINVAL
+		return 0, unix.EINVAL
 	}
 	if err := efd.write(ctx, src); err != nil {
 		return 0, err
@@ -146,9 +149,9 @@ func (efd *EventFileDescription) Write(ctx context.Context, src usermem.IOSequen
 // Preconditions: Must be called with efd.mu locked.
 func (efd *EventFileDescription) hostReadLocked(ctx context.Context, dst usermem.IOSequence) error {
 	var buf [8]byte
-	if _, err := syscall.Read(efd.hostfd, buf[:]); err != nil {
-		if err == syscall.EWOULDBLOCK {
-			return syserror.ErrWouldBlock
+	if _, err := unix.Read(efd.hostfd, buf[:]); err != nil {
+		if err == unix.EWOULDBLOCK {
+			return linuxerr.ErrWouldBlock
 		}
 		return err
 	}
@@ -166,7 +169,7 @@ func (efd *EventFileDescription) read(ctx context.Context, dst usermem.IOSequenc
 	// We can't complete the read if the value is currently zero.
 	if efd.val == 0 {
 		efd.mu.Unlock()
-		return syserror.ErrWouldBlock
+		return linuxerr.ErrWouldBlock
 	}
 
 	// Update the value based on the mode the event is operating in.
@@ -185,10 +188,10 @@ func (efd *EventFileDescription) read(ctx context.Context, dst usermem.IOSequenc
 	// Notify writers. We do this even if we were already writable because
 	// it is possible that a writer is waiting to write the maximum value
 	// to the event.
-	efd.queue.Notify(waiter.EventOut)
+	efd.queue.Notify(waiter.WritableEvents)
 
 	var buf [8]byte
-	usermem.ByteOrder.PutUint64(buf[:], val)
+	hostarch.ByteOrder.PutUint64(buf[:], val)
 	_, err := dst.CopyOut(ctx, buf[:])
 	return err
 }
@@ -196,10 +199,10 @@ func (efd *EventFileDescription) read(ctx context.Context, dst usermem.IOSequenc
 // Preconditions: Must be called with efd.mu locked.
 func (efd *EventFileDescription) hostWriteLocked(val uint64) error {
 	var buf [8]byte
-	usermem.ByteOrder.PutUint64(buf[:], val)
-	_, err := syscall.Write(efd.hostfd, buf[:])
-	if err == syscall.EWOULDBLOCK {
-		return syserror.ErrWouldBlock
+	hostarch.ByteOrder.PutUint64(buf[:], val)
+	_, err := unix.Write(efd.hostfd, buf[:])
+	if err == unix.EWOULDBLOCK {
+		return linuxerr.ErrWouldBlock
 	}
 	return err
 }
@@ -209,7 +212,7 @@ func (efd *EventFileDescription) write(ctx context.Context, src usermem.IOSequen
 	if _, err := src.CopyIn(ctx, buf[:]); err != nil {
 		return err
 	}
-	val := usermem.ByteOrder.Uint64(buf[:])
+	val := hostarch.ByteOrder.Uint64(buf[:])
 
 	return efd.Signal(val)
 }
@@ -217,7 +220,7 @@ func (efd *EventFileDescription) write(ctx context.Context, src usermem.IOSequen
 // Signal is an internal function to signal the event fd.
 func (efd *EventFileDescription) Signal(val uint64) error {
 	if val == math.MaxUint64 {
-		return syscall.EINVAL
+		return unix.EINVAL
 	}
 
 	efd.mu.Lock()
@@ -231,14 +234,14 @@ func (efd *EventFileDescription) Signal(val uint64) error {
 	// uint64 minus 1.
 	if val > math.MaxUint64-1-efd.val {
 		efd.mu.Unlock()
-		return syserror.ErrWouldBlock
+		return linuxerr.ErrWouldBlock
 	}
 
 	efd.val += val
 	efd.mu.Unlock()
 
 	// Always trigger a notification.
-	efd.queue.Notify(waiter.EventIn)
+	efd.queue.Notify(waiter.ReadableEvents)
 
 	return nil
 }
@@ -254,25 +257,29 @@ func (efd *EventFileDescription) Readiness(mask waiter.EventMask) waiter.EventMa
 
 	ready := waiter.EventMask(0)
 	if efd.val > 0 {
-		ready |= waiter.EventIn
+		ready |= waiter.ReadableEvents
 	}
 
 	if efd.val < math.MaxUint64-1 {
-		ready |= waiter.EventOut
+		ready |= waiter.WritableEvents
 	}
 
 	return mask & ready
 }
 
 // EventRegister implements waiter.Waitable.EventRegister.
-func (efd *EventFileDescription) EventRegister(entry *waiter.Entry, mask waiter.EventMask) {
-	efd.queue.EventRegister(entry, mask)
+func (efd *EventFileDescription) EventRegister(entry *waiter.Entry) error {
+	efd.queue.EventRegister(entry)
 
 	efd.mu.Lock()
 	defer efd.mu.Unlock()
 	if efd.hostfd >= 0 {
-		fdnotifier.UpdateFD(int32(efd.hostfd))
+		if err := fdnotifier.UpdateFD(int32(efd.hostfd)); err != nil {
+			efd.queue.EventUnregister(entry)
+			return err
+		}
 	}
+	return nil
 }
 
 // EventUnregister implements waiter.Waitable.EventUnregister.
@@ -282,6 +289,13 @@ func (efd *EventFileDescription) EventUnregister(entry *waiter.Entry) {
 	efd.mu.Lock()
 	defer efd.mu.Unlock()
 	if efd.hostfd >= 0 {
-		fdnotifier.UpdateFD(int32(efd.hostfd))
+		if err := fdnotifier.UpdateFD(int32(efd.hostfd)); err != nil {
+			panic(fmt.Sprint("UpdateFD:", err))
+		}
 	}
+}
+
+// Epollable implements FileDescriptionImpl.Epollable.
+func (efd *EventFileDescription) Epollable() bool {
+	return true
 }

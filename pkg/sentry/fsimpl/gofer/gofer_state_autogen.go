@@ -19,6 +19,7 @@ func (l *dentryList) StateFields() []string {
 
 func (l *dentryList) beforeSave() {}
 
+// +checklocksignore
 func (l *dentryList) StateSave(stateSinkObject state.Sink) {
 	l.beforeSave()
 	stateSinkObject.Save(0, &l.head)
@@ -27,6 +28,7 @@ func (l *dentryList) StateSave(stateSinkObject state.Sink) {
 
 func (l *dentryList) afterLoad() {}
 
+// +checklocksignore
 func (l *dentryList) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &l.head)
 	stateSourceObject.Load(1, &l.tail)
@@ -45,6 +47,7 @@ func (e *dentryEntry) StateFields() []string {
 
 func (e *dentryEntry) beforeSave() {}
 
+// +checklocksignore
 func (e *dentryEntry) StateSave(stateSinkObject state.Sink) {
 	e.beforeSave()
 	stateSinkObject.Save(0, &e.next)
@@ -53,9 +56,37 @@ func (e *dentryEntry) StateSave(stateSinkObject state.Sink) {
 
 func (e *dentryEntry) afterLoad() {}
 
+// +checklocksignore
 func (e *dentryEntry) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &e.next)
 	stateSourceObject.Load(1, &e.prev)
+}
+
+func (d *directfsDentry) StateTypeName() string {
+	return "pkg/sentry/fsimpl/gofer.directfsDentry"
+}
+
+func (d *directfsDentry) StateFields() []string {
+	return []string{
+		"dentry",
+		"controlFD",
+	}
+}
+
+func (d *directfsDentry) beforeSave() {}
+
+// +checklocksignore
+func (d *directfsDentry) StateSave(stateSinkObject state.Sink) {
+	d.beforeSave()
+	stateSinkObject.Save(0, &d.dentry)
+	stateSinkObject.Save(1, &d.controlFD)
+}
+
+// +checklocksignore
+func (d *directfsDentry) StateLoad(stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &d.dentry)
+	stateSourceObject.Load(1, &d.controlFD)
+	stateSourceObject.AfterLoad(d.afterLoad)
 }
 
 func (fd *directoryFD) StateTypeName() string {
@@ -73,6 +104,7 @@ func (fd *directoryFD) StateFields() []string {
 
 func (fd *directoryFD) beforeSave() {}
 
+// +checklocksignore
 func (fd *directoryFD) StateSave(stateSinkObject state.Sink) {
 	fd.beforeSave()
 	stateSinkObject.Save(0, &fd.fileDescription)
@@ -83,11 +115,71 @@ func (fd *directoryFD) StateSave(stateSinkObject state.Sink) {
 
 func (fd *directoryFD) afterLoad() {}
 
+// +checklocksignore
 func (fd *directoryFD) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &fd.fileDescription)
 	stateSourceObject.Load(1, &fd.DirectoryFileDescriptionDefaultImpl)
 	stateSourceObject.Load(2, &fd.off)
 	stateSourceObject.Load(3, &fd.dirents)
+}
+
+func (cache *stringFixedCache) StateTypeName() string {
+	return "pkg/sentry/fsimpl/gofer.stringFixedCache"
+}
+
+func (cache *stringFixedCache) StateFields() []string {
+	return []string{
+		"namesList",
+		"size",
+	}
+}
+
+func (cache *stringFixedCache) beforeSave() {}
+
+// +checklocksignore
+func (cache *stringFixedCache) StateSave(stateSinkObject state.Sink) {
+	cache.beforeSave()
+	stateSinkObject.Save(0, &cache.namesList)
+	stateSinkObject.Save(1, &cache.size)
+}
+
+func (cache *stringFixedCache) afterLoad() {}
+
+// +checklocksignore
+func (cache *stringFixedCache) StateLoad(stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &cache.namesList)
+	stateSourceObject.Load(1, &cache.size)
+}
+
+func (d *dentryCache) StateTypeName() string {
+	return "pkg/sentry/fsimpl/gofer.dentryCache"
+}
+
+func (d *dentryCache) StateFields() []string {
+	return []string{
+		"dentries",
+		"dentriesLen",
+		"maxCachedDentries",
+	}
+}
+
+func (d *dentryCache) beforeSave() {}
+
+// +checklocksignore
+func (d *dentryCache) StateSave(stateSinkObject state.Sink) {
+	d.beforeSave()
+	stateSinkObject.Save(0, &d.dentries)
+	stateSinkObject.Save(1, &d.dentriesLen)
+	stateSinkObject.Save(2, &d.maxCachedDentries)
+}
+
+func (d *dentryCache) afterLoad() {}
+
+// +checklocksignore
+func (d *dentryCache) StateLoad(stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &d.dentries)
+	stateSourceObject.Load(1, &d.dentriesLen)
+	stateSourceObject.Load(2, &d.maxCachedDentries)
 }
 
 func (fstype *FilesystemType) StateTypeName() string {
@@ -100,12 +192,14 @@ func (fstype *FilesystemType) StateFields() []string {
 
 func (fstype *FilesystemType) beforeSave() {}
 
+// +checklocksignore
 func (fstype *FilesystemType) StateSave(stateSinkObject state.Sink) {
 	fstype.beforeSave()
 }
 
 func (fstype *FilesystemType) afterLoad() {}
 
+// +checklocksignore
 func (fstype *FilesystemType) StateLoad(stateSourceObject state.Source) {
 }
 
@@ -122,8 +216,7 @@ func (fs *filesystem) StateFields() []string {
 		"clock",
 		"devMinor",
 		"root",
-		"cachedDentries",
-		"cachedDentriesLen",
+		"dentryCache",
 		"syncableDentries",
 		"specialFileFDs",
 		"lastIno",
@@ -134,6 +227,7 @@ func (fs *filesystem) StateFields() []string {
 
 func (fs *filesystem) beforeSave() {}
 
+// +checklocksignore
 func (fs *filesystem) StateSave(stateSinkObject state.Sink) {
 	fs.beforeSave()
 	stateSinkObject.Save(0, &fs.vfsfs)
@@ -143,17 +237,17 @@ func (fs *filesystem) StateSave(stateSinkObject state.Sink) {
 	stateSinkObject.Save(4, &fs.clock)
 	stateSinkObject.Save(5, &fs.devMinor)
 	stateSinkObject.Save(6, &fs.root)
-	stateSinkObject.Save(7, &fs.cachedDentries)
-	stateSinkObject.Save(8, &fs.cachedDentriesLen)
-	stateSinkObject.Save(9, &fs.syncableDentries)
-	stateSinkObject.Save(10, &fs.specialFileFDs)
-	stateSinkObject.Save(11, &fs.lastIno)
-	stateSinkObject.Save(12, &fs.savedDentryRW)
-	stateSinkObject.Save(13, &fs.released)
+	stateSinkObject.Save(7, &fs.dentryCache)
+	stateSinkObject.Save(8, &fs.syncableDentries)
+	stateSinkObject.Save(9, &fs.specialFileFDs)
+	stateSinkObject.Save(10, &fs.lastIno)
+	stateSinkObject.Save(11, &fs.savedDentryRW)
+	stateSinkObject.Save(12, &fs.released)
 }
 
 func (fs *filesystem) afterLoad() {}
 
+// +checklocksignore
 func (fs *filesystem) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &fs.vfsfs)
 	stateSourceObject.Load(1, &fs.mfp)
@@ -162,13 +256,12 @@ func (fs *filesystem) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(4, &fs.clock)
 	stateSourceObject.Load(5, &fs.devMinor)
 	stateSourceObject.Load(6, &fs.root)
-	stateSourceObject.Load(7, &fs.cachedDentries)
-	stateSourceObject.Load(8, &fs.cachedDentriesLen)
-	stateSourceObject.Load(9, &fs.syncableDentries)
-	stateSourceObject.Load(10, &fs.specialFileFDs)
-	stateSourceObject.Load(11, &fs.lastIno)
-	stateSourceObject.Load(12, &fs.savedDentryRW)
-	stateSourceObject.Load(13, &fs.released)
+	stateSourceObject.Load(7, &fs.dentryCache)
+	stateSourceObject.Load(8, &fs.syncableDentries)
+	stateSourceObject.Load(9, &fs.specialFileFDs)
+	stateSourceObject.Load(10, &fs.lastIno)
+	stateSourceObject.Load(11, &fs.savedDentryRW)
+	stateSourceObject.Load(12, &fs.released)
 }
 
 func (f *filesystemOptions) StateTypeName() string {
@@ -182,18 +275,18 @@ func (f *filesystemOptions) StateFields() []string {
 		"interop",
 		"dfltuid",
 		"dfltgid",
-		"msize",
-		"version",
-		"maxCachedDentries",
 		"forcePageCache",
 		"limitHostFDTranslation",
 		"overlayfsStaleRead",
 		"regularFilesUseSpecialFileFD",
+		"disableFifoOpen",
+		"directfs",
 	}
 }
 
 func (f *filesystemOptions) beforeSave() {}
 
+// +checklocksignore
 func (f *filesystemOptions) StateSave(stateSinkObject state.Sink) {
 	f.beforeSave()
 	stateSinkObject.Save(0, &f.fd)
@@ -201,30 +294,54 @@ func (f *filesystemOptions) StateSave(stateSinkObject state.Sink) {
 	stateSinkObject.Save(2, &f.interop)
 	stateSinkObject.Save(3, &f.dfltuid)
 	stateSinkObject.Save(4, &f.dfltgid)
-	stateSinkObject.Save(5, &f.msize)
-	stateSinkObject.Save(6, &f.version)
-	stateSinkObject.Save(7, &f.maxCachedDentries)
-	stateSinkObject.Save(8, &f.forcePageCache)
-	stateSinkObject.Save(9, &f.limitHostFDTranslation)
-	stateSinkObject.Save(10, &f.overlayfsStaleRead)
-	stateSinkObject.Save(11, &f.regularFilesUseSpecialFileFD)
+	stateSinkObject.Save(5, &f.forcePageCache)
+	stateSinkObject.Save(6, &f.limitHostFDTranslation)
+	stateSinkObject.Save(7, &f.overlayfsStaleRead)
+	stateSinkObject.Save(8, &f.regularFilesUseSpecialFileFD)
+	stateSinkObject.Save(9, &f.disableFifoOpen)
+	stateSinkObject.Save(10, &f.directfs)
 }
 
 func (f *filesystemOptions) afterLoad() {}
 
+// +checklocksignore
 func (f *filesystemOptions) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &f.fd)
 	stateSourceObject.Load(1, &f.aname)
 	stateSourceObject.Load(2, &f.interop)
 	stateSourceObject.Load(3, &f.dfltuid)
 	stateSourceObject.Load(4, &f.dfltgid)
-	stateSourceObject.Load(5, &f.msize)
-	stateSourceObject.Load(6, &f.version)
-	stateSourceObject.Load(7, &f.maxCachedDentries)
-	stateSourceObject.Load(8, &f.forcePageCache)
-	stateSourceObject.Load(9, &f.limitHostFDTranslation)
-	stateSourceObject.Load(10, &f.overlayfsStaleRead)
-	stateSourceObject.Load(11, &f.regularFilesUseSpecialFileFD)
+	stateSourceObject.Load(5, &f.forcePageCache)
+	stateSourceObject.Load(6, &f.limitHostFDTranslation)
+	stateSourceObject.Load(7, &f.overlayfsStaleRead)
+	stateSourceObject.Load(8, &f.regularFilesUseSpecialFileFD)
+	stateSourceObject.Load(9, &f.disableFifoOpen)
+	stateSourceObject.Load(10, &f.directfs)
+}
+
+func (d *directfsOpts) StateTypeName() string {
+	return "pkg/sentry/fsimpl/gofer.directfsOpts"
+}
+
+func (d *directfsOpts) StateFields() []string {
+	return []string{
+		"enabled",
+	}
+}
+
+func (d *directfsOpts) beforeSave() {}
+
+// +checklocksignore
+func (d *directfsOpts) StateSave(stateSinkObject state.Sink) {
+	d.beforeSave()
+	stateSinkObject.Save(0, &d.enabled)
+}
+
+func (d *directfsOpts) afterLoad() {}
+
+// +checklocksignore
+func (d *directfsOpts) StateLoad(stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &d.enabled)
 }
 
 func (i *InteropMode) StateTypeName() string {
@@ -249,6 +366,7 @@ func (i *InternalFilesystemOptions) StateFields() []string {
 
 func (i *InternalFilesystemOptions) beforeSave() {}
 
+// +checklocksignore
 func (i *InternalFilesystemOptions) StateSave(stateSinkObject state.Sink) {
 	i.beforeSave()
 	stateSinkObject.Save(0, &i.UniqueID)
@@ -258,10 +376,42 @@ func (i *InternalFilesystemOptions) StateSave(stateSinkObject state.Sink) {
 
 func (i *InternalFilesystemOptions) afterLoad() {}
 
+// +checklocksignore
 func (i *InternalFilesystemOptions) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &i.UniqueID)
 	stateSourceObject.Load(1, &i.LeakConnection)
 	stateSourceObject.Load(2, &i.OpenSocketsByConnecting)
+}
+
+func (i *inoKey) StateTypeName() string {
+	return "pkg/sentry/fsimpl/gofer.inoKey"
+}
+
+func (i *inoKey) StateFields() []string {
+	return []string{
+		"ino",
+		"devMinor",
+		"devMajor",
+	}
+}
+
+func (i *inoKey) beforeSave() {}
+
+// +checklocksignore
+func (i *inoKey) StateSave(stateSinkObject state.Sink) {
+	i.beforeSave()
+	stateSinkObject.Save(0, &i.ino)
+	stateSinkObject.Save(1, &i.devMinor)
+	stateSinkObject.Save(2, &i.devMajor)
+}
+
+func (i *inoKey) afterLoad() {}
+
+// +checklocksignore
+func (i *inoKey) StateLoad(stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &i.ino)
+	stateSourceObject.Load(1, &i.devMinor)
+	stateSourceObject.Load(2, &i.devMajor)
 }
 
 func (d *dentry) StateTypeName() string {
@@ -275,13 +425,17 @@ func (d *dentry) StateFields() []string {
 		"fs",
 		"parent",
 		"name",
-		"qidPath",
+		"inoKey",
 		"deleted",
 		"cached",
-		"dentryEntry",
+		"cacheEntry",
+		"syncableListEntry",
 		"children",
+		"negativeChildrenCache",
+		"negativeChildren",
 		"syntheticChildren",
 		"dirents",
+		"childrenSet",
 		"ino",
 		"mode",
 		"uid",
@@ -305,9 +459,11 @@ func (d *dentry) StateFields() []string {
 		"pipe",
 		"locks",
 		"watches",
+		"impl",
 	}
 }
 
+// +checklocksignore
 func (d *dentry) StateSave(stateSinkObject state.Sink) {
 	d.beforeSave()
 	stateSinkObject.Save(0, &d.vfsd)
@@ -315,75 +471,142 @@ func (d *dentry) StateSave(stateSinkObject state.Sink) {
 	stateSinkObject.Save(2, &d.fs)
 	stateSinkObject.Save(3, &d.parent)
 	stateSinkObject.Save(4, &d.name)
-	stateSinkObject.Save(5, &d.qidPath)
+	stateSinkObject.Save(5, &d.inoKey)
 	stateSinkObject.Save(6, &d.deleted)
 	stateSinkObject.Save(7, &d.cached)
-	stateSinkObject.Save(8, &d.dentryEntry)
-	stateSinkObject.Save(9, &d.children)
-	stateSinkObject.Save(10, &d.syntheticChildren)
-	stateSinkObject.Save(11, &d.dirents)
-	stateSinkObject.Save(12, &d.ino)
-	stateSinkObject.Save(13, &d.mode)
-	stateSinkObject.Save(14, &d.uid)
-	stateSinkObject.Save(15, &d.gid)
-	stateSinkObject.Save(16, &d.blockSize)
-	stateSinkObject.Save(17, &d.atime)
-	stateSinkObject.Save(18, &d.mtime)
-	stateSinkObject.Save(19, &d.ctime)
-	stateSinkObject.Save(20, &d.btime)
-	stateSinkObject.Save(21, &d.size)
-	stateSinkObject.Save(22, &d.atimeDirty)
-	stateSinkObject.Save(23, &d.mtimeDirty)
-	stateSinkObject.Save(24, &d.nlink)
-	stateSinkObject.Save(25, &d.mappings)
-	stateSinkObject.Save(26, &d.cache)
-	stateSinkObject.Save(27, &d.dirty)
-	stateSinkObject.Save(28, &d.pf)
-	stateSinkObject.Save(29, &d.haveTarget)
-	stateSinkObject.Save(30, &d.target)
-	stateSinkObject.Save(31, &d.endpoint)
-	stateSinkObject.Save(32, &d.pipe)
-	stateSinkObject.Save(33, &d.locks)
-	stateSinkObject.Save(34, &d.watches)
+	stateSinkObject.Save(8, &d.cacheEntry)
+	stateSinkObject.Save(9, &d.syncableListEntry)
+	stateSinkObject.Save(10, &d.children)
+	stateSinkObject.Save(11, &d.negativeChildrenCache)
+	stateSinkObject.Save(12, &d.negativeChildren)
+	stateSinkObject.Save(13, &d.syntheticChildren)
+	stateSinkObject.Save(14, &d.dirents)
+	stateSinkObject.Save(15, &d.childrenSet)
+	stateSinkObject.Save(16, &d.ino)
+	stateSinkObject.Save(17, &d.mode)
+	stateSinkObject.Save(18, &d.uid)
+	stateSinkObject.Save(19, &d.gid)
+	stateSinkObject.Save(20, &d.blockSize)
+	stateSinkObject.Save(21, &d.atime)
+	stateSinkObject.Save(22, &d.mtime)
+	stateSinkObject.Save(23, &d.ctime)
+	stateSinkObject.Save(24, &d.btime)
+	stateSinkObject.Save(25, &d.size)
+	stateSinkObject.Save(26, &d.atimeDirty)
+	stateSinkObject.Save(27, &d.mtimeDirty)
+	stateSinkObject.Save(28, &d.nlink)
+	stateSinkObject.Save(29, &d.mappings)
+	stateSinkObject.Save(30, &d.cache)
+	stateSinkObject.Save(31, &d.dirty)
+	stateSinkObject.Save(32, &d.pf)
+	stateSinkObject.Save(33, &d.haveTarget)
+	stateSinkObject.Save(34, &d.target)
+	stateSinkObject.Save(35, &d.endpoint)
+	stateSinkObject.Save(36, &d.pipe)
+	stateSinkObject.Save(37, &d.locks)
+	stateSinkObject.Save(38, &d.watches)
+	stateSinkObject.Save(39, &d.impl)
 }
 
+// +checklocksignore
 func (d *dentry) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &d.vfsd)
 	stateSourceObject.Load(1, &d.refs)
 	stateSourceObject.Load(2, &d.fs)
 	stateSourceObject.Load(3, &d.parent)
 	stateSourceObject.Load(4, &d.name)
-	stateSourceObject.Load(5, &d.qidPath)
+	stateSourceObject.Load(5, &d.inoKey)
 	stateSourceObject.Load(6, &d.deleted)
 	stateSourceObject.Load(7, &d.cached)
-	stateSourceObject.Load(8, &d.dentryEntry)
-	stateSourceObject.Load(9, &d.children)
-	stateSourceObject.Load(10, &d.syntheticChildren)
-	stateSourceObject.Load(11, &d.dirents)
-	stateSourceObject.Load(12, &d.ino)
-	stateSourceObject.Load(13, &d.mode)
-	stateSourceObject.Load(14, &d.uid)
-	stateSourceObject.Load(15, &d.gid)
-	stateSourceObject.Load(16, &d.blockSize)
-	stateSourceObject.Load(17, &d.atime)
-	stateSourceObject.Load(18, &d.mtime)
-	stateSourceObject.Load(19, &d.ctime)
-	stateSourceObject.Load(20, &d.btime)
-	stateSourceObject.Load(21, &d.size)
-	stateSourceObject.Load(22, &d.atimeDirty)
-	stateSourceObject.Load(23, &d.mtimeDirty)
-	stateSourceObject.Load(24, &d.nlink)
-	stateSourceObject.Load(25, &d.mappings)
-	stateSourceObject.Load(26, &d.cache)
-	stateSourceObject.Load(27, &d.dirty)
-	stateSourceObject.Load(28, &d.pf)
-	stateSourceObject.Load(29, &d.haveTarget)
-	stateSourceObject.Load(30, &d.target)
-	stateSourceObject.Load(31, &d.endpoint)
-	stateSourceObject.Load(32, &d.pipe)
-	stateSourceObject.Load(33, &d.locks)
-	stateSourceObject.Load(34, &d.watches)
+	stateSourceObject.Load(8, &d.cacheEntry)
+	stateSourceObject.Load(9, &d.syncableListEntry)
+	stateSourceObject.Load(10, &d.children)
+	stateSourceObject.Load(11, &d.negativeChildrenCache)
+	stateSourceObject.Load(12, &d.negativeChildren)
+	stateSourceObject.Load(13, &d.syntheticChildren)
+	stateSourceObject.Load(14, &d.dirents)
+	stateSourceObject.Load(15, &d.childrenSet)
+	stateSourceObject.Load(16, &d.ino)
+	stateSourceObject.Load(17, &d.mode)
+	stateSourceObject.Load(18, &d.uid)
+	stateSourceObject.Load(19, &d.gid)
+	stateSourceObject.Load(20, &d.blockSize)
+	stateSourceObject.Load(21, &d.atime)
+	stateSourceObject.Load(22, &d.mtime)
+	stateSourceObject.Load(23, &d.ctime)
+	stateSourceObject.Load(24, &d.btime)
+	stateSourceObject.Load(25, &d.size)
+	stateSourceObject.Load(26, &d.atimeDirty)
+	stateSourceObject.Load(27, &d.mtimeDirty)
+	stateSourceObject.Load(28, &d.nlink)
+	stateSourceObject.Load(29, &d.mappings)
+	stateSourceObject.Load(30, &d.cache)
+	stateSourceObject.Load(31, &d.dirty)
+	stateSourceObject.Load(32, &d.pf)
+	stateSourceObject.Load(33, &d.haveTarget)
+	stateSourceObject.Load(34, &d.target)
+	stateSourceObject.Load(35, &d.endpoint)
+	stateSourceObject.Load(36, &d.pipe)
+	stateSourceObject.Load(37, &d.locks)
+	stateSourceObject.Load(38, &d.watches)
+	stateSourceObject.Load(39, &d.impl)
 	stateSourceObject.AfterLoad(d.afterLoad)
+}
+
+func (s *stringListElem) StateTypeName() string {
+	return "pkg/sentry/fsimpl/gofer.stringListElem"
+}
+
+func (s *stringListElem) StateFields() []string {
+	return []string{
+		"str",
+		"stringEntry",
+	}
+}
+
+func (s *stringListElem) beforeSave() {}
+
+// +checklocksignore
+func (s *stringListElem) StateSave(stateSinkObject state.Sink) {
+	s.beforeSave()
+	stateSinkObject.Save(0, &s.str)
+	stateSinkObject.Save(1, &s.stringEntry)
+}
+
+func (s *stringListElem) afterLoad() {}
+
+// +checklocksignore
+func (s *stringListElem) StateLoad(stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &s.str)
+	stateSourceObject.Load(1, &s.stringEntry)
+}
+
+func (d *dentryListElem) StateTypeName() string {
+	return "pkg/sentry/fsimpl/gofer.dentryListElem"
+}
+
+func (d *dentryListElem) StateFields() []string {
+	return []string{
+		"d",
+		"dentryEntry",
+	}
+}
+
+func (d *dentryListElem) beforeSave() {}
+
+// +checklocksignore
+func (d *dentryListElem) StateSave(stateSinkObject state.Sink) {
+	d.beforeSave()
+	stateSinkObject.Save(0, &d.d)
+	stateSinkObject.Save(1, &d.dentryEntry)
+}
+
+func (d *dentryListElem) afterLoad() {}
+
+// +checklocksignore
+func (d *dentryListElem) StateLoad(stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &d.d)
+	stateSourceObject.Load(1, &d.dentryEntry)
 }
 
 func (fd *fileDescription) StateTypeName() string {
@@ -400,6 +623,7 @@ func (fd *fileDescription) StateFields() []string {
 
 func (fd *fileDescription) beforeSave() {}
 
+// +checklocksignore
 func (fd *fileDescription) StateSave(stateSinkObject state.Sink) {
 	fd.beforeSave()
 	stateSinkObject.Save(0, &fd.vfsfd)
@@ -409,10 +633,36 @@ func (fd *fileDescription) StateSave(stateSinkObject state.Sink) {
 
 func (fd *fileDescription) afterLoad() {}
 
+// +checklocksignore
 func (fd *fileDescription) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &fd.vfsfd)
 	stateSourceObject.Load(1, &fd.FileDescriptionDefaultImpl)
 	stateSourceObject.Load(2, &fd.LockFD)
+}
+
+func (d *lisafsDentry) StateTypeName() string {
+	return "pkg/sentry/fsimpl/gofer.lisafsDentry"
+}
+
+func (d *lisafsDentry) StateFields() []string {
+	return []string{
+		"dentry",
+	}
+}
+
+func (d *lisafsDentry) beforeSave() {}
+
+// +checklocksignore
+func (d *lisafsDentry) StateSave(stateSinkObject state.Sink) {
+	d.beforeSave()
+	stateSinkObject.Save(0, &d.dentry)
+}
+
+func (d *lisafsDentry) afterLoad() {}
+
+// +checklocksignore
+func (d *lisafsDentry) StateLoad(stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &d.dentry)
 }
 
 func (fd *regularFileFD) StateTypeName() string {
@@ -428,6 +678,7 @@ func (fd *regularFileFD) StateFields() []string {
 
 func (fd *regularFileFD) beforeSave() {}
 
+// +checklocksignore
 func (fd *regularFileFD) StateSave(stateSinkObject state.Sink) {
 	fd.beforeSave()
 	stateSinkObject.Save(0, &fd.fileDescription)
@@ -436,6 +687,7 @@ func (fd *regularFileFD) StateSave(stateSinkObject state.Sink) {
 
 func (fd *regularFileFD) afterLoad() {}
 
+// +checklocksignore
 func (fd *regularFileFD) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &fd.fileDescription)
 	stateSourceObject.Load(1, &fd.off)
@@ -455,6 +707,7 @@ func (d *dentryPlatformFile) StateFields() []string {
 
 func (d *dentryPlatformFile) beforeSave() {}
 
+// +checklocksignore
 func (d *dentryPlatformFile) StateSave(stateSinkObject state.Sink) {
 	d.beforeSave()
 	stateSinkObject.Save(0, &d.dentry)
@@ -462,6 +715,7 @@ func (d *dentryPlatformFile) StateSave(stateSinkObject state.Sink) {
 	stateSinkObject.Save(2, &d.hostFileMapper)
 }
 
+// +checklocksignore
 func (d *dentryPlatformFile) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &d.dentry)
 	stateSourceObject.Load(1, &d.fdRefs)
@@ -482,6 +736,7 @@ func (s *savedDentryRW) StateFields() []string {
 
 func (s *savedDentryRW) beforeSave() {}
 
+// +checklocksignore
 func (s *savedDentryRW) StateSave(stateSinkObject state.Sink) {
 	s.beforeSave()
 	stateSinkObject.Save(0, &s.read)
@@ -490,6 +745,7 @@ func (s *savedDentryRW) StateSave(stateSinkObject state.Sink) {
 
 func (s *savedDentryRW) afterLoad() {}
 
+// +checklocksignore
 func (s *savedDentryRW) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &s.read)
 	stateSourceObject.Load(1, &s.write)
@@ -508,6 +764,7 @@ func (e *endpoint) StateFields() []string {
 
 func (e *endpoint) beforeSave() {}
 
+// +checklocksignore
 func (e *endpoint) StateSave(stateSinkObject state.Sink) {
 	e.beforeSave()
 	stateSinkObject.Save(0, &e.dentry)
@@ -516,9 +773,66 @@ func (e *endpoint) StateSave(stateSinkObject state.Sink) {
 
 func (e *endpoint) afterLoad() {}
 
+// +checklocksignore
 func (e *endpoint) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &e.dentry)
 	stateSourceObject.Load(1, &e.path)
+}
+
+func (l *specialFDList) StateTypeName() string {
+	return "pkg/sentry/fsimpl/gofer.specialFDList"
+}
+
+func (l *specialFDList) StateFields() []string {
+	return []string{
+		"head",
+		"tail",
+	}
+}
+
+func (l *specialFDList) beforeSave() {}
+
+// +checklocksignore
+func (l *specialFDList) StateSave(stateSinkObject state.Sink) {
+	l.beforeSave()
+	stateSinkObject.Save(0, &l.head)
+	stateSinkObject.Save(1, &l.tail)
+}
+
+func (l *specialFDList) afterLoad() {}
+
+// +checklocksignore
+func (l *specialFDList) StateLoad(stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &l.head)
+	stateSourceObject.Load(1, &l.tail)
+}
+
+func (e *specialFDEntry) StateTypeName() string {
+	return "pkg/sentry/fsimpl/gofer.specialFDEntry"
+}
+
+func (e *specialFDEntry) StateFields() []string {
+	return []string{
+		"next",
+		"prev",
+	}
+}
+
+func (e *specialFDEntry) beforeSave() {}
+
+// +checklocksignore
+func (e *specialFDEntry) StateSave(stateSinkObject state.Sink) {
+	e.beforeSave()
+	stateSinkObject.Save(0, &e.next)
+	stateSinkObject.Save(1, &e.prev)
+}
+
+func (e *specialFDEntry) afterLoad() {}
+
+// +checklocksignore
+func (e *specialFDEntry) StateLoad(stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &e.next)
+	stateSourceObject.Load(1, &e.prev)
 }
 
 func (fd *specialFileFD) StateTypeName() string {
@@ -528,53 +842,132 @@ func (fd *specialFileFD) StateTypeName() string {
 func (fd *specialFileFD) StateFields() []string {
 	return []string{
 		"fileDescription",
+		"specialFDEntry",
 		"isRegularFile",
 		"seekable",
 		"queue",
 		"off",
 		"haveBuf",
 		"buf",
+		"hostFileMapper",
+		"fileRefs",
 	}
 }
 
 func (fd *specialFileFD) beforeSave() {}
 
+// +checklocksignore
 func (fd *specialFileFD) StateSave(stateSinkObject state.Sink) {
 	fd.beforeSave()
 	stateSinkObject.Save(0, &fd.fileDescription)
-	stateSinkObject.Save(1, &fd.isRegularFile)
-	stateSinkObject.Save(2, &fd.seekable)
-	stateSinkObject.Save(3, &fd.queue)
-	stateSinkObject.Save(4, &fd.off)
-	stateSinkObject.Save(5, &fd.haveBuf)
-	stateSinkObject.Save(6, &fd.buf)
+	stateSinkObject.Save(1, &fd.specialFDEntry)
+	stateSinkObject.Save(2, &fd.isRegularFile)
+	stateSinkObject.Save(3, &fd.seekable)
+	stateSinkObject.Save(4, &fd.queue)
+	stateSinkObject.Save(5, &fd.off)
+	stateSinkObject.Save(6, &fd.haveBuf)
+	stateSinkObject.Save(7, &fd.buf)
+	stateSinkObject.Save(8, &fd.hostFileMapper)
+	stateSinkObject.Save(9, &fd.fileRefs)
 }
 
+// +checklocksignore
 func (fd *specialFileFD) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &fd.fileDescription)
-	stateSourceObject.Load(1, &fd.isRegularFile)
-	stateSourceObject.Load(2, &fd.seekable)
-	stateSourceObject.Load(3, &fd.queue)
-	stateSourceObject.Load(4, &fd.off)
-	stateSourceObject.Load(5, &fd.haveBuf)
-	stateSourceObject.Load(6, &fd.buf)
+	stateSourceObject.Load(1, &fd.specialFDEntry)
+	stateSourceObject.Load(2, &fd.isRegularFile)
+	stateSourceObject.Load(3, &fd.seekable)
+	stateSourceObject.Load(4, &fd.queue)
+	stateSourceObject.Load(5, &fd.off)
+	stateSourceObject.Load(6, &fd.haveBuf)
+	stateSourceObject.Load(7, &fd.buf)
+	stateSourceObject.Load(8, &fd.hostFileMapper)
+	stateSourceObject.Load(9, &fd.fileRefs)
 	stateSourceObject.AfterLoad(fd.afterLoad)
+}
+
+func (l *stringList) StateTypeName() string {
+	return "pkg/sentry/fsimpl/gofer.stringList"
+}
+
+func (l *stringList) StateFields() []string {
+	return []string{
+		"head",
+		"tail",
+	}
+}
+
+func (l *stringList) beforeSave() {}
+
+// +checklocksignore
+func (l *stringList) StateSave(stateSinkObject state.Sink) {
+	l.beforeSave()
+	stateSinkObject.Save(0, &l.head)
+	stateSinkObject.Save(1, &l.tail)
+}
+
+func (l *stringList) afterLoad() {}
+
+// +checklocksignore
+func (l *stringList) StateLoad(stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &l.head)
+	stateSourceObject.Load(1, &l.tail)
+}
+
+func (e *stringEntry) StateTypeName() string {
+	return "pkg/sentry/fsimpl/gofer.stringEntry"
+}
+
+func (e *stringEntry) StateFields() []string {
+	return []string{
+		"next",
+		"prev",
+	}
+}
+
+func (e *stringEntry) beforeSave() {}
+
+// +checklocksignore
+func (e *stringEntry) StateSave(stateSinkObject state.Sink) {
+	e.beforeSave()
+	stateSinkObject.Save(0, &e.next)
+	stateSinkObject.Save(1, &e.prev)
+}
+
+func (e *stringEntry) afterLoad() {}
+
+// +checklocksignore
+func (e *stringEntry) StateLoad(stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &e.next)
+	stateSourceObject.Load(1, &e.prev)
 }
 
 func init() {
 	state.Register((*dentryList)(nil))
 	state.Register((*dentryEntry)(nil))
+	state.Register((*directfsDentry)(nil))
 	state.Register((*directoryFD)(nil))
+	state.Register((*stringFixedCache)(nil))
+	state.Register((*dentryCache)(nil))
 	state.Register((*FilesystemType)(nil))
 	state.Register((*filesystem)(nil))
 	state.Register((*filesystemOptions)(nil))
+	state.Register((*directfsOpts)(nil))
 	state.Register((*InteropMode)(nil))
 	state.Register((*InternalFilesystemOptions)(nil))
+	state.Register((*inoKey)(nil))
 	state.Register((*dentry)(nil))
+	state.Register((*stringListElem)(nil))
+	state.Register((*dentryListElem)(nil))
 	state.Register((*fileDescription)(nil))
+	state.Register((*lisafsDentry)(nil))
 	state.Register((*regularFileFD)(nil))
 	state.Register((*dentryPlatformFile)(nil))
 	state.Register((*savedDentryRW)(nil))
 	state.Register((*endpoint)(nil))
+	state.Register((*specialFDList)(nil))
+	state.Register((*specialFDEntry)(nil))
 	state.Register((*specialFileFD)(nil))
+	state.Register((*stringList)(nil))
+	state.Register((*stringEntry)(nil))
 }

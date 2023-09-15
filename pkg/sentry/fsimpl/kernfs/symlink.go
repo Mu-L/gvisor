@@ -17,9 +17,9 @@ package kernfs
 import (
 	"gvisor.dev/gvisor/pkg/abi/linux"
 	"gvisor.dev/gvisor/pkg/context"
+	"gvisor.dev/gvisor/pkg/errors/linuxerr"
 	"gvisor.dev/gvisor/pkg/sentry/kernel/auth"
 	"gvisor.dev/gvisor/pkg/sentry/vfs"
-	"gvisor.dev/gvisor/pkg/syserror"
 )
 
 // StaticSymlink provides an Inode implementation for symlinks that point to
@@ -29,8 +29,10 @@ import (
 type StaticSymlink struct {
 	InodeAttrs
 	InodeNoopRefCount
+	InodeNotAnonymous
 	InodeSymlink
 	InodeNoStatFS
+	InodeWatches
 
 	target string
 }
@@ -62,5 +64,5 @@ func (s *StaticSymlink) Getlink(context.Context, *vfs.Mount) (vfs.VirtualDentry,
 
 // SetStat implements Inode.SetStat not allowing inode attributes to be changed.
 func (*StaticSymlink) SetStat(context.Context, *vfs.Filesystem, *auth.Credentials, vfs.SetStatOptions) error {
-	return syserror.EPERM
+	return linuxerr.EPERM
 }

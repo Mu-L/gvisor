@@ -49,9 +49,9 @@ const (
 	// EthernetAddressSize is the size, in bytes, of an ethernet address.
 	EthernetAddressSize = 6
 
-	// unspecifiedEthernetAddress is the unspecified ethernet address
+	// UnspecifiedEthernetAddress is the unspecified ethernet address
 	// (all bits set to 0).
-	unspecifiedEthernetAddress = tcpip.LinkAddress("\x00\x00\x00\x00\x00\x00")
+	UnspecifiedEthernetAddress = tcpip.LinkAddress("\x00\x00\x00\x00\x00\x00")
 
 	// EthernetBroadcastAddress is an ethernet address that addresses every node
 	// on a local link.
@@ -134,7 +134,7 @@ func IsValidUnicastEthernetAddress(addr tcpip.LinkAddress) bool {
 		return false
 	}
 
-	if addr == unspecifiedEthernetAddress {
+	if addr == UnspecifiedEthernetAddress {
 		return false
 	}
 
@@ -159,10 +159,11 @@ func EthernetAddressFromMulticastIPv4Address(addr tcpip.Address) tcpip.LinkAddre
 	// address by placing the low-order 23-bits of the IP address
 	// into the low-order 23 bits of the Ethernet multicast address
 	// 01-00-5E-00-00-00 (hex).
+	addrBytes := addr.As4()
 	linkAddrBytes[0] = 0x1
 	linkAddrBytes[2] = 0x5e
-	linkAddrBytes[3] = addr[1] & 0x7F
-	copy(linkAddrBytes[4:], addr[IPv4AddressSize-2:])
+	linkAddrBytes[3] = addrBytes[1] & 0x7F
+	copy(linkAddrBytes[4:], addrBytes[IPv4AddressSize-2:])
 	return tcpip.LinkAddress(linkAddrBytes[:])
 }
 
@@ -180,7 +181,8 @@ func EthernetAddressFromMulticastIPv6Address(addr tcpip.Address) tcpip.LinkAddre
 	// transmitted to the Ethernet multicast address whose first
 	// two octets are the value 3333 hexadecimal and whose last
 	// four octets are the last four octets of DST.
-	linkAddrBytes := []byte(addr[IPv6AddressSize-EthernetAddressSize:])
+	addrBytes := addr.As16()
+	linkAddrBytes := []byte(addrBytes[IPv6AddressSize-EthernetAddressSize:])
 	linkAddrBytes[0] = 0x33
 	linkAddrBytes[1] = 0x33
 	return tcpip.LinkAddress(linkAddrBytes[:])

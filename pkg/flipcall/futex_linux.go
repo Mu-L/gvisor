@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build linux
 // +build linux
 
 package flipcall
@@ -19,17 +20,16 @@ package flipcall
 import (
 	"fmt"
 	"runtime"
-	"sync/atomic"
-	"syscall"
 
+	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/abi/linux"
 )
 
 func (ep *Endpoint) futexSetPeerActive() error {
-	if atomic.CompareAndSwapUint32(ep.connState(), ep.activeState, ep.inactiveState) {
+	if ep.connState().CompareAndSwap(ep.activeState, ep.inactiveState) {
 		return nil
 	}
-	switch cs := atomic.LoadUint32(ep.connState()); cs {
+	switch cs := ep.connState().Load(); cs {
 	case csShutdown:
 		return ShutdownError{}
 	default:
@@ -46,7 +46,7 @@ func (ep *Endpoint) futexWakePeer() error {
 
 func (ep *Endpoint) futexWaitUntilActive() error {
 	for {
-		switch cs := atomic.LoadUint32(ep.connState()); cs {
+		switch cs := ep.connState().Load(); cs {
 		case ep.activeState:
 			return nil
 		case ep.inactiveState:
@@ -66,22 +66,22 @@ func (ep *Endpoint) futexWaitUntilActive() error {
 }
 
 func (ep *Endpoint) futexWakeConnState(numThreads int32) error {
-	if _, _, e := syscall.RawSyscall(syscall.SYS_FUTEX, ep.packet, linux.FUTEX_WAKE, uintptr(numThreads)); e != 0 {
+	if _, _, e := unix.RawSyscall(unix.SYS_FUTEX, ep.packet, linux.FUTEX_WAKE, uintptr(numThreads)); e != 0 {
 		return e
 	}
 	return nil
 }
 
 func (ep *Endpoint) futexWaitConnState(curState uint32) error {
-	_, _, e := syscall.Syscall6(syscall.SYS_FUTEX, ep.packet, linux.FUTEX_WAIT, uintptr(curState), 0, 0, 0)
-	if e != 0 && e != syscall.EAGAIN && e != syscall.EINTR {
+	_, _, e := unix.Syscall6(unix.SYS_FUTEX, ep.packet, linux.FUTEX_WAIT, uintptr(curState), 0, 0, 0)
+	if e != 0 && e != unix.EAGAIN && e != unix.EINTR {
 		return e
 	}
 	return nil
 }
 
 func yieldThread() {
-	syscall.Syscall(syscall.SYS_SCHED_YIELD, 0, 0, 0)
+	unix.Syscall(unix.SYS_SCHED_YIELD, 0, 0, 0)
 	// The thread we're trying to yield to may be waiting for a Go runtime P.
 	// runtime.Gosched() will hand off ours if necessary.
 	runtime.Gosched()

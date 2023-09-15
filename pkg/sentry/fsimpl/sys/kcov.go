@@ -17,13 +17,13 @@ package sys
 import (
 	"gvisor.dev/gvisor/pkg/abi/linux"
 	"gvisor.dev/gvisor/pkg/context"
+	"gvisor.dev/gvisor/pkg/errors/linuxerr"
 	"gvisor.dev/gvisor/pkg/sentry/arch"
 	"gvisor.dev/gvisor/pkg/sentry/fsimpl/kernfs"
 	"gvisor.dev/gvisor/pkg/sentry/kernel"
 	"gvisor.dev/gvisor/pkg/sentry/kernel/auth"
 	"gvisor.dev/gvisor/pkg/sentry/memmap"
 	"gvisor.dev/gvisor/pkg/sentry/vfs"
-	"gvisor.dev/gvisor/pkg/syserror"
 	"gvisor.dev/gvisor/pkg/usermem"
 )
 
@@ -39,8 +39,10 @@ func (fs *filesystem) newKcovFile(ctx context.Context, creds *auth.Credentials) 
 type kcovInode struct {
 	kernfs.InodeAttrs
 	kernfs.InodeNoopRefCount
+	kernfs.InodeNotAnonymous
 	kernfs.InodeNotDirectory
 	kernfs.InodeNotSymlink
+	kernfs.InodeWatches
 	implStatFS
 }
 
@@ -74,7 +76,7 @@ type kcovFD struct {
 }
 
 // Ioctl implements vfs.FileDescriptionImpl.Ioctl.
-func (fd *kcovFD) Ioctl(ctx context.Context, uio usermem.IO, args arch.SyscallArguments) (uintptr, error) {
+func (fd *kcovFD) Ioctl(ctx context.Context, uio usermem.IO, sysno uintptr, args arch.SyscallArguments) (uintptr, error) {
 	cmd := uint32(args[1].Int())
 	arg := args[2].Uint64()
 	switch uint32(cmd) {
@@ -85,11 +87,11 @@ func (fd *kcovFD) Ioctl(ctx context.Context, uio usermem.IO, args arch.SyscallAr
 	case linux.KCOV_DISABLE:
 		if arg != 0 {
 			// This arg is unused; it should be 0.
-			return 0, syserror.EINVAL
+			return 0, linuxerr.EINVAL
 		}
 		return 0, fd.kcov.DisableTrace(ctx)
 	default:
-		return 0, syserror.ENOTTY
+		return 0, linuxerr.ENOTTY
 	}
 }
 

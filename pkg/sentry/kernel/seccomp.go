@@ -15,13 +15,12 @@
 package kernel
 
 import (
-	"syscall"
-
+	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/abi/linux"
 	"gvisor.dev/gvisor/pkg/bpf"
+	"gvisor.dev/gvisor/pkg/errors/linuxerr"
+	"gvisor.dev/gvisor/pkg/hostarch"
 	"gvisor.dev/gvisor/pkg/sentry/arch"
-	"gvisor.dev/gvisor/pkg/syserror"
-	"gvisor.dev/gvisor/pkg/usermem"
 )
 
 const maxSyscallFilterInstructions = 1 << 15
@@ -36,15 +35,15 @@ func dataAsBPFInput(t *Task, d *linux.SeccompData) bpf.Input {
 	return bpf.InputBytes{
 		Data: buf,
 		// Go-marshal always uses the native byte order.
-		Order: usermem.ByteOrder,
+		Order: hostarch.ByteOrder,
 	}
 }
 
-func seccompSiginfo(t *Task, errno, sysno int32, ip usermem.Addr) *arch.SignalInfo {
-	si := &arch.SignalInfo{
+func seccompSiginfo(t *Task, errno, sysno int32, ip hostarch.Addr) *linux.SignalInfo {
+	si := &linux.SignalInfo{
 		Signo: int32(linux.SIGSYS),
 		Errno: errno,
-		Code:  arch.SYS_SECCOMP,
+		Code:  linux.SYS_SECCOMP,
 	}
 	si.SetCallAddr(uint64(ip))
 	si.SetSyscall(sysno)
@@ -57,7 +56,7 @@ func seccompSiginfo(t *Task, errno, sysno int32, ip usermem.Addr) *arch.SignalIn
 // in because vsyscalls do not use the values in t.Arch().)
 //
 // Preconditions: The caller must be running on the task goroutine.
-func (t *Task) checkSeccompSyscall(sysno int32, args arch.SyscallArguments, ip usermem.Addr) linux.BPFAction {
+func (t *Task) checkSeccompSyscall(sysno int32, args arch.SyscallArguments, ip hostarch.Addr) linux.BPFAction {
 	result := linux.BPFAction(t.evaluateSyscallFilters(sysno, args, ip))
 	action := result & linux.SECCOMP_RET_ACTION
 	switch action {
@@ -83,7 +82,7 @@ func (t *Task) checkSeccompSyscall(sysno int32, args arch.SyscallArguments, ip u
 		// the system call is not executed."
 		if !t.ptraceSeccomp(result.Data()) {
 			// This useless-looking temporary is needed because Go.
-			tmp := uintptr(syscall.ENOSYS)
+			tmp := uintptr(unix.ENOSYS)
 			t.Arch().SetReturn(-tmp)
 			return linux.SECCOMP_RET_ERRNO
 		}
@@ -103,7 +102,7 @@ func (t *Task) checkSeccompSyscall(sysno int32, args arch.SyscallArguments, ip u
 	return action
 }
 
-func (t *Task) evaluateSyscallFilters(sysno int32, args arch.SyscallArguments, ip usermem.Addr) uint32 {
+func (t *Task) evaluateSyscallFilters(sysno int32, args arch.SyscallArguments, ip hostarch.Addr) uint32 {
 	data := linux.SeccompData{
 		Nr:                 sysno,
 		Arch:               t.image.st.AuditNumber,
@@ -177,7 +176,7 @@ func (t *Task) AppendSyscallFilter(p bpf.Program, syncAll bool) error {
 	}
 
 	if totalLength > maxSyscallFilterInstructions {
-		return syserror.ENOMEM
+		return linuxerr.ENOMEM
 	}
 
 	newFilters = append(newFilters, p)

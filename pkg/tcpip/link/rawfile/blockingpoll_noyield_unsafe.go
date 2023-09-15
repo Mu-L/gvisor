@@ -12,19 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build linux && !amd64 && !arm64
 // +build linux,!amd64,!arm64
 
 package rawfile
 
 import (
-	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 // BlockingPoll is just a stub function that forwards to the ppoll() system call
 // on non-amd64 and non-arm64 platforms.
-func BlockingPoll(fds *PollEvent, nfds int, timeout *syscall.Timespec) (int, syscall.Errno) {
-	n, _, e := syscall.Syscall6(syscall.SYS_PPOLL, uintptr(unsafe.Pointer(fds)),
+func BlockingPoll(fds *PollEvent, nfds int, timeout *unix.Timespec) (int, unix.Errno) {
+	n, _, e := unix.Syscall6(unix.SYS_PPOLL, uintptr(unsafe.Pointer(fds)),
 		uintptr(nfds), uintptr(unsafe.Pointer(timeout)), 0, 0, 0)
 
 	return int(n), e

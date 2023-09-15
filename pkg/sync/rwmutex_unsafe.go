@@ -6,10 +6,10 @@
 // This is mostly copied from the standard library's sync/rwmutex.go.
 //
 // Happens-before relationships indicated to the race detector:
-// - Unlock -> Lock (via writerSem)
-// - Unlock -> RLock (via readerSem)
-// - RUnlock -> Lock (via writerSem)
-// - DowngradeLock -> RLock (via readerSem)
+//	- Unlock -> Lock (via writerSem)
+//	- Unlock -> RLock (via readerSem)
+//	- RUnlock -> Lock (via writerSem)
+//	- DowngradeLock -> RLock (via readerSem)
 
 package sync
 
@@ -37,6 +37,7 @@ const rwmutexMaxReaders = 1 << 30
 
 // TryRLock locks rw for reading. It returns true if it succeeds and false
 // otherwise. It does not block.
+// +checklocksignore
 func (rw *CrossGoroutineRWMutex) TryRLock() bool {
 	if RaceEnabled {
 		RaceDisable()
@@ -65,6 +66,7 @@ func (rw *CrossGoroutineRWMutex) TryRLock() bool {
 // It should not be used for recursive read locking; a blocked Lock call
 // excludes new readers from acquiring the lock. See the documentation on the
 // RWMutex type.
+// +checklocksignore
 func (rw *CrossGoroutineRWMutex) RLock() {
 	if RaceEnabled {
 		RaceDisable()
@@ -82,7 +84,9 @@ func (rw *CrossGoroutineRWMutex) RLock() {
 // RUnlock undoes a single RLock call.
 //
 // Preconditions:
-// * rw is locked for reading.
+//   - rw is locked for reading.
+//
+// +checklocksignore
 func (rw *CrossGoroutineRWMutex) RUnlock() {
 	if RaceEnabled {
 		RaceReleaseMerge(unsafe.Pointer(&rw.writerSem))
@@ -105,6 +109,7 @@ func (rw *CrossGoroutineRWMutex) RUnlock() {
 
 // TryLock locks rw for writing. It returns true if it succeeds and false
 // otherwise. It does not block.
+// +checklocksignore
 func (rw *CrossGoroutineRWMutex) TryLock() bool {
 	if RaceEnabled {
 		RaceDisable()
@@ -133,6 +138,7 @@ func (rw *CrossGoroutineRWMutex) TryLock() bool {
 
 // Lock locks rw for writing. If the lock is already locked for reading or
 // writing, Lock blocks until the lock is available.
+// +checklocksignore
 func (rw *CrossGoroutineRWMutex) Lock() {
 	if RaceEnabled {
 		RaceDisable()
@@ -154,7 +160,9 @@ func (rw *CrossGoroutineRWMutex) Lock() {
 // Unlock unlocks rw for writing.
 //
 // Preconditions:
-// * rw is locked for writing.
+//   - rw is locked for writing.
+//
+// +checklocksignore
 func (rw *CrossGoroutineRWMutex) Unlock() {
 	if RaceEnabled {
 		RaceRelease(unsafe.Pointer(&rw.writerSem))
@@ -180,7 +188,9 @@ func (rw *CrossGoroutineRWMutex) Unlock() {
 // DowngradeLock atomically unlocks rw for writing and locks it for reading.
 //
 // Preconditions:
-// * rw is locked for writing.
+//   - rw is locked for writing.
+//
+// +checklocksignore
 func (rw *CrossGoroutineRWMutex) DowngradeLock() {
 	if RaceEnabled {
 		RaceRelease(unsafe.Pointer(&rw.readerSem))
@@ -225,6 +235,7 @@ type RWMutex struct {
 
 // TryRLock locks rw for reading. It returns true if it succeeds and false
 // otherwise. It does not block.
+// +checklocksignore
 func (rw *RWMutex) TryRLock() bool {
 	// Note lock first to enforce proper locking even if unsuccessful.
 	noteLock(unsafe.Pointer(rw))
@@ -240,6 +251,7 @@ func (rw *RWMutex) TryRLock() bool {
 // It should not be used for recursive read locking; a blocked Lock call
 // excludes new readers from acquiring the lock. See the documentation on the
 // RWMutex type.
+// +checklocksignore
 func (rw *RWMutex) RLock() {
 	noteLock(unsafe.Pointer(rw))
 	rw.m.RLock()
@@ -248,8 +260,10 @@ func (rw *RWMutex) RLock() {
 // RUnlock undoes a single RLock call.
 //
 // Preconditions:
-// * rw is locked for reading.
-// * rw was locked by this goroutine.
+//   - rw is locked for reading.
+//   - rw was locked by this goroutine.
+//
+// +checklocksignore
 func (rw *RWMutex) RUnlock() {
 	rw.m.RUnlock()
 	noteUnlock(unsafe.Pointer(rw))
@@ -257,6 +271,7 @@ func (rw *RWMutex) RUnlock() {
 
 // TryLock locks rw for writing. It returns true if it succeeds and false
 // otherwise. It does not block.
+// +checklocksignore
 func (rw *RWMutex) TryLock() bool {
 	// Note lock first to enforce proper locking even if unsuccessful.
 	noteLock(unsafe.Pointer(rw))
@@ -269,6 +284,7 @@ func (rw *RWMutex) TryLock() bool {
 
 // Lock locks rw for writing. If the lock is already locked for reading or
 // writing, Lock blocks until the lock is available.
+// +checklocksignore
 func (rw *RWMutex) Lock() {
 	noteLock(unsafe.Pointer(rw))
 	rw.m.Lock()
@@ -277,8 +293,10 @@ func (rw *RWMutex) Lock() {
 // Unlock unlocks rw for writing.
 //
 // Preconditions:
-// * rw is locked for writing.
-// * rw was locked by this goroutine.
+//   - rw is locked for writing.
+//   - rw was locked by this goroutine.
+//
+// +checklocksignore
 func (rw *RWMutex) Unlock() {
 	rw.m.Unlock()
 	noteUnlock(unsafe.Pointer(rw))
@@ -287,7 +305,9 @@ func (rw *RWMutex) Unlock() {
 // DowngradeLock atomically unlocks rw for writing and locks it for reading.
 //
 // Preconditions:
-// * rw is locked for writing.
+//   - rw is locked for writing.
+//
+// +checklocksignore
 func (rw *RWMutex) DowngradeLock() {
 	// No note change for DowngradeLock.
 	rw.m.DowngradeLock()

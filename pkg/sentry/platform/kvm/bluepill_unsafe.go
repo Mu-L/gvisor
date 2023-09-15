@@ -12,23 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// +build go1.12
-// +build !go1.18
+//go:build go1.18
+// +build go1.18
 
-// Check go:linkname function signatures when updating Go version.
+// //go:linkname directives type-checked by checklinkname. Any other
+// non-linkname assumptions outside the Go 1 compatibility guarantee should
+// have an accompanied vet check or version guard build tag.
 
 package kvm
 
 import (
-	"sync/atomic"
-	"syscall"
 	"unsafe"
 
+	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/sentry/arch"
 )
 
 //go:linkname throw runtime.throw
-func throw(string)
+func throw(s string)
 
 // vCPUPtr returns a CPU for the given address.
 //
@@ -63,14 +64,14 @@ func bluepillArchContext(context unsafe.Pointer) *arch.SignalContext64 {
 //go:nosplit
 func bluepillGuestExit(c *vCPU, context unsafe.Pointer) {
 	// Increment our counter.
-	atomic.AddUint64(&c.guestExits, 1)
+	c.guestExits.Add(1)
 
 	// Copy out registers.
 	bluepillArchExit(c, bluepillArchContext(context))
 
 	// Return to the vCPUReady state; notify any waiters.
-	user := atomic.LoadUint32(&c.state) & vCPUUser
-	switch atomic.SwapUint32(&c.state, user) {
+	user := c.state.Load() & vCPUUser
+	switch c.state.Swap(user) {
 	case user | vCPUGuest: // Expected case.
 	case user | vCPUGuest | vCPUWaiter:
 		c.notify()
@@ -79,11 +80,33 @@ func bluepillGuestExit(c *vCPU, context unsafe.Pointer) {
 	}
 }
 
+var hexSyms = []byte("0123456789abcdef")
+
+//go:nosplit
+func printHex(title []byte, val uint64) {
+	var str [18]byte
+	for i := 0; i < 16; i++ {
+		str[16-i] = hexSyms[val&0xf]
+		val = val >> 4
+	}
+	str[0] = ' '
+	str[17] = '\n'
+	unix.RawSyscall(unix.SYS_WRITE, uintptr(unix.Stderr), uintptr(unsafe.Pointer(&title[0])), uintptr(len(title)))
+	unix.RawSyscall(unix.SYS_WRITE, uintptr(unix.Stderr), uintptr(unsafe.Pointer(&str)), 18)
+}
+
 // bluepillHandler is called from the signal stub.
 //
 // The world may be stopped while this is executing, and it executes on the
 // signal stack. It should only execute raw system calls and functions that are
 // explicitly marked go:nosplit.
+//
+// Ideally, this function should switch to gsignal, as runtime.sigtramp does,
+// but that is tedious given all the runtime internals. That said, using
+// gsignal inside a signal handler is not _required_, provided we avoid stack
+// splits and allocations. Note that calling any splittable function here will
+// be flaky; if the signal stack is below the G stack then we will trigger a
+// split and crash. If above, we won't trigger a split.
 //
 // +checkescape:all
 //
@@ -93,7 +116,7 @@ func bluepillHandler(context unsafe.Pointer) {
 	c := bluepillArchEnter(bluepillArchContext(context))
 
 	// Mark this as guest mode.
-	switch atomic.SwapUint32(&c.state, vCPUGuest|vCPUUser) {
+	switch c.state.Swap(vCPUGuest | vCPUUser) {
 	case vCPUUser: // Expected case.
 	case vCPUUser | vCPUWaiter:
 		c.notify()
@@ -102,23 +125,25 @@ func bluepillHandler(context unsafe.Pointer) {
 	}
 
 	for {
-		_, _, errno := syscall.RawSyscall(syscall.SYS_IOCTL, uintptr(c.fd), _KVM_RUN, 0) // escapes: no.
+		hostExitCounter.Increment()
+		_, _, errno := unix.RawSyscall(unix.SYS_IOCTL, uintptr(c.fd), _KVM_RUN, 0) // escapes: no.
 		switch errno {
 		case 0: // Expected case.
-		case syscall.EINTR:
+		case unix.EINTR:
+			interruptCounter.Increment()
 			// First, we process whatever pending signal
 			// interrupted KVM. Since we're in a signal handler
 			// currently, all signals are masked and the signal
 			// must have been delivered directly to this thread.
-			timeout := syscall.Timespec{}
-			sig, _, errno := syscall.RawSyscall6( // escapes: no.
-				syscall.SYS_RT_SIGTIMEDWAIT,
+			timeout := unix.Timespec{}
+			sig, _, errno := unix.RawSyscall6( // escapes: no.
+				unix.SYS_RT_SIGTIMEDWAIT,
 				uintptr(unsafe.Pointer(&bounceSignalMask)),
 				0,                                 // siginfo.
 				uintptr(unsafe.Pointer(&timeout)), // timeout.
 				8,                                 // sigset size.
 				0, 0)
-			if errno == syscall.EAGAIN {
+			if errno == unix.EAGAIN {
 				continue
 			}
 			if errno != 0 {
@@ -140,7 +165,7 @@ func bluepillHandler(context unsafe.Pointer) {
 				c.runData.requestInterruptWindow = 1
 				continue // Rerun vCPU.
 			}
-		case syscall.EFAULT:
+		case unix.EFAULT:
 			// If a fault is not serviceable due to the host
 			// backing pages having page permissions, instead of an
 			// MMIO exit we receive EFAULT from the run ioctl. We
@@ -148,7 +173,7 @@ func bluepillHandler(context unsafe.Pointer) {
 			// mode and have interrupts disabled.
 			bluepillSigBus(c)
 			continue // Rerun vCPU.
-		case syscall.ENOSYS:
+		case unix.ENOSYS:
 			bluepillHandleEnosys(c)
 			continue
 		default:
@@ -175,6 +200,7 @@ func bluepillHandler(context unsafe.Pointer) {
 			c.die(bluepillArchContext(context), "debug")
 			return
 		case _KVM_EXIT_HLT:
+			c.hltSanityCheck()
 			bluepillGuestExit(c, context)
 			return
 		case _KVM_EXIT_MMIO:
@@ -184,36 +210,8 @@ func bluepillHandler(context unsafe.Pointer) {
 				return
 			}
 
-			// Increment the fault count.
-			atomic.AddUint32(&c.faults, 1)
-
-			// For MMIO, the physical address is the first data item.
-			physical = uintptr(c.runData.data[0])
-			virtual, ok := handleBluepillFault(c.machine, physical, physicalRegions, _KVM_MEM_FLAGS_NONE)
-			if !ok {
-				c.die(bluepillArchContext(context), "invalid physical address")
-				return
-			}
-
-			// We now need to fill in the data appropriately. KVM
-			// expects us to provide the result of the given MMIO
-			// operation in the runData struct. This is safe
-			// because, if a fault occurs here, the same fault
-			// would have occurred in guest mode. The kernel should
-			// not create invalid page table mappings.
-			data := (*[8]byte)(unsafe.Pointer(&c.runData.data[1]))
-			length := (uintptr)((uint32)(c.runData.data[2]))
-			write := (uint8)(((c.runData.data[2] >> 32) & 0xff)) != 0
-			for i := uintptr(0); i < length; i++ {
-				b := bytePtr(uintptr(virtual) + i)
-				if write {
-					// Write to the given address.
-					*b = data[i]
-				} else {
-					// Read from the given address.
-					data[i] = *b
-				}
-			}
+			c.die(bluepillArchContext(context), "exit_mmio")
+			return
 		case _KVM_EXIT_IRQ_WINDOW_OPEN:
 			bluepillStopGuest(c)
 		case _KVM_EXIT_SHUTDOWN:

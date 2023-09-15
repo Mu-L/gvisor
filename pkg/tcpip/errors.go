@@ -300,6 +300,19 @@ func (*ErrInvalidOptionValue) IgnoreStats() bool {
 }
 func (*ErrInvalidOptionValue) String() string { return "invalid option value specified" }
 
+// ErrInvalidPortRange indicates an attempt to set an invalid port range.
+//
+// +stateify savable
+type ErrInvalidPortRange struct{}
+
+func (*ErrInvalidPortRange) isError() {}
+
+// IgnoreStats implements Error.
+func (*ErrInvalidPortRange) IgnoreStats() bool {
+	return true
+}
+func (*ErrInvalidPortRange) String() string { return "invalid port range" }
+
 // ErrMalformedHeader indicates the operation encountered a malformed header.
 //
 // +stateify savable
@@ -367,19 +380,45 @@ func (*ErrNoPortAvailable) IgnoreStats() bool {
 }
 func (*ErrNoPortAvailable) String() string { return "no ports are available" }
 
-// ErrNoRoute indicates the operation is not able to find a route to the
-// destination.
+// ErrHostUnreachable indicates that a destination host could not be
+// reached.
 //
 // +stateify savable
-type ErrNoRoute struct{}
+type ErrHostUnreachable struct{}
 
-func (*ErrNoRoute) isError() {}
+func (*ErrHostUnreachable) isError() {}
 
 // IgnoreStats implements Error.
-func (*ErrNoRoute) IgnoreStats() bool {
+func (*ErrHostUnreachable) IgnoreStats() bool {
 	return false
 }
-func (*ErrNoRoute) String() string { return "no route" }
+func (*ErrHostUnreachable) String() string { return "no route to host" }
+
+// ErrHostDown indicates that a destination host is down.
+//
+// +stateify savable
+type ErrHostDown struct{}
+
+func (*ErrHostDown) isError() {}
+
+// IgnoreStats implements Error.
+func (*ErrHostDown) IgnoreStats() bool {
+	return false
+}
+func (*ErrHostDown) String() string { return "host is down" }
+
+// ErrNoNet indicates that the host is not on the network.
+//
+// +stateify savable
+type ErrNoNet struct{}
+
+func (*ErrNoNet) isError() {}
+
+// IgnoreStats implements Error.
+func (*ErrNoNet) IgnoreStats() bool {
+	return false
+}
+func (*ErrNoNet) String() string { return "machine is not on the network" }
 
 // ErrNoSuchFile is used to indicate that ENOENT should be returned the to
 // calling application.
@@ -538,5 +577,32 @@ func (*ErrWouldBlock) IgnoreStats() bool {
 	return true
 }
 func (*ErrWouldBlock) String() string { return "operation would block" }
+
+// ErrMissingRequiredFields indicates that a required field is missing.
+//
+// +stateify savable
+type ErrMissingRequiredFields struct{}
+
+func (*ErrMissingRequiredFields) isError() {}
+
+// IgnoreStats implements Error.
+func (*ErrMissingRequiredFields) IgnoreStats() bool {
+	return true
+}
+func (*ErrMissingRequiredFields) String() string { return "mising required fields" }
+
+// ErrMulticastInputCannotBeOutput indicates that an input interface matches an
+// output interface in the same multicast route.
+//
+// +stateify savable
+type ErrMulticastInputCannotBeOutput struct{}
+
+func (*ErrMulticastInputCannotBeOutput) isError() {}
+
+// IgnoreStats implements Error.
+func (*ErrMulticastInputCannotBeOutput) IgnoreStats() bool {
+	return true
+}
+func (*ErrMulticastInputCannotBeOutput) String() string { return "output cannot contain input" }
 
 // LINT.ThenChange(../syserr/netstack.go)

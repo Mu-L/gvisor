@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build arm64
 // +build arm64
 
 package arch
@@ -22,9 +23,9 @@ import (
 
 	"gvisor.dev/gvisor/pkg/abi/linux"
 	"gvisor.dev/gvisor/pkg/cpuid"
-	"gvisor.dev/gvisor/pkg/log"
+	"gvisor.dev/gvisor/pkg/errors/linuxerr"
+	"gvisor.dev/gvisor/pkg/sentry/arch/fpu"
 	rpb "gvisor.dev/gvisor/pkg/sentry/arch/registers_go_proto"
-	"gvisor.dev/gvisor/pkg/syserror"
 )
 
 // Registers represents the CPU registers for this architecture.
@@ -40,64 +41,10 @@ type Registers struct {
 const (
 	// SyscallWidth is the width of insturctions.
 	SyscallWidth = 4
-
-	// fpsimdMagic is the magic number which is used in fpsimd_context.
-	fpsimdMagic = 0x46508001
-
-	// fpsimdContextSize is the size of fpsimd_context.
-	fpsimdContextSize = 0x210
 )
 
 // ARMTrapFlag is the mask for the trap flag.
 const ARMTrapFlag = uint64(1) << 21
-
-// aarch64FPState is aarch64 floating point state.
-type aarch64FPState []byte
-
-// initAarch64FPState sets up initial state.
-//
-// Related code in Linux kernel: fpsimd_flush_thread().
-// FPCR = FPCR_RM_RN (0x0 << 22).
-//
-// Currently, aarch64FPState is only a space of 0x210 length for fpstate.
-// The fp head is useless in sentry/ptrace/kvm.
-//
-func initAarch64FPState(data aarch64FPState) {
-}
-
-func newAarch64FPStateSlice() []byte {
-	return alignedBytes(4096, 16)[:fpsimdContextSize]
-}
-
-// newAarch64FPState returns an initialized floating point state.
-//
-// The returned state is large enough to store all floating point state
-// supported by host, even if the app won't use much of it due to a restricted
-// FeatureSet.
-func newAarch64FPState() aarch64FPState {
-	f := aarch64FPState(newAarch64FPStateSlice())
-	initAarch64FPState(f)
-	return f
-}
-
-// fork creates and returns an identical copy of the aarch64 floating point state.
-func (f aarch64FPState) fork() aarch64FPState {
-	n := aarch64FPState(newAarch64FPStateSlice())
-	copy(n, f)
-	return n
-}
-
-// FloatingPointData returns the raw data pointer.
-func (f aarch64FPState) FloatingPointData() *FloatingPointData {
-	return (*FloatingPointData)(&f[0])
-}
-
-// NewFloatingPointData returns a new floating point data blob.
-//
-// This is primarily for use in tests.
-func NewFloatingPointData() *FloatingPointData {
-	return (*FloatingPointData)(&(newAarch64FPState()[0]))
-}
 
 // State contains the common architecture bits for aarch64 (the build tag of this
 // file ensures it's only built on aarch64).
@@ -108,10 +55,7 @@ type State struct {
 	Regs Registers
 
 	// Our floating point state.
-	aarch64FPState `state:"wait"`
-
-	// FeatureSet is a pointer to the currently active feature set.
-	FeatureSet *cpuid.FeatureSet
+	fpState fpu.State `state:"wait"`
 
 	// OrigR0 stores the value of register R0.
 	OrigR0 uint64
@@ -162,21 +106,15 @@ func (s State) Proto() *rpb.Registers {
 // Fork creates and returns an identical copy of the state.
 func (s *State) Fork() State {
 	return State{
-		Regs:           s.Regs,
-		aarch64FPState: s.aarch64FPState.fork(),
-		FeatureSet:     s.FeatureSet,
-		OrigR0:         s.OrigR0,
+		Regs:    s.Regs,
+		fpState: s.fpState.Fork(),
+		OrigR0:  s.OrigR0,
 	}
 }
 
 // StateData implements Context.StateData.
 func (s *State) StateData() *State {
 	return s
-}
-
-// CPUIDEmulate emulates a cpuid instruction.
-func (s *State) CPUIDEmulate(l log.Logger) {
-	// TODO(gvisor.dev/issue/1255): cpuid is not supported.
 }
 
 // SingleStep implements Context.SingleStep.
@@ -258,6 +196,9 @@ func (s *State) PtraceSetRegs(src io.Reader) (int, error) {
 		return 0, err
 	}
 	regs.UnmarshalUnsafe(buf)
+	if !regs.validRegs() {
+		return 0, linuxerr.EINVAL
+	}
 	s.Regs = regs
 	return ptraceRegistersSize, nil
 }
@@ -282,28 +223,28 @@ const (
 )
 
 // PtraceGetRegSet implements Context.PtraceGetRegSet.
-func (s *State) PtraceGetRegSet(regset uintptr, dst io.Writer, maxlen int) (int, error) {
+func (s *State) PtraceGetRegSet(regset uintptr, dst io.Writer, maxlen int, _ cpuid.FeatureSet) (int, error) {
 	switch regset {
 	case _NT_PRSTATUS:
 		if maxlen < ptraceRegistersSize {
-			return 0, syserror.EFAULT
+			return 0, linuxerr.EFAULT
 		}
 		return s.PtraceGetRegs(dst)
 	default:
-		return 0, syserror.EINVAL
+		return 0, linuxerr.EINVAL
 	}
 }
 
 // PtraceSetRegSet implements Context.PtraceSetRegSet.
-func (s *State) PtraceSetRegSet(regset uintptr, src io.Reader, maxlen int) (int, error) {
+func (s *State) PtraceSetRegSet(regset uintptr, src io.Reader, maxlen int, _ cpuid.FeatureSet) (int, error) {
 	switch regset {
 	case _NT_PRSTATUS:
 		if maxlen < ptraceRegistersSize {
-			return 0, syserror.EFAULT
+			return 0, linuxerr.EFAULT
 		}
 		return s.PtraceSetRegs(src)
 	default:
-		return 0, syserror.EINVAL
+		return 0, linuxerr.EINVAL
 	}
 }
 
@@ -313,15 +254,14 @@ func (s *State) FullRestore() bool {
 }
 
 // New returns a new architecture context.
-func New(arch Arch, fs *cpuid.FeatureSet) Context {
+func New(arch Arch) *Context64 {
 	switch arch {
 	case ARM64:
-		return &context64{
+		return &Context64{
 			State{
-				aarch64FPState: newAarch64FPState(),
-				FeatureSet:     fs,
+				fpState: fpu.NewState(),
 			},
-			[]aarch64FPState(nil),
+			[]fpu.State(nil),
 		}
 	}
 	panic(fmt.Sprintf("unknown architecture %v", arch))

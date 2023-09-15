@@ -19,7 +19,6 @@ import (
 	"fmt"
 
 	"gvisor.dev/gvisor/pkg/tcpip"
-	"gvisor.dev/gvisor/pkg/tcpip/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 )
@@ -28,7 +27,7 @@ import (
 // pkt.Data.
 //
 // Returns true if the header was successfully parsed.
-func ARP(pkt *stack.PacketBuffer) bool {
+func ARP(pkt stack.PacketBufferPtr) bool {
 	_, ok := pkt.NetworkHeader().Consume(header.ARPSize)
 	if ok {
 		pkt.NetworkProtocolNumber = header.ARPProtocolNumber
@@ -40,8 +39,8 @@ func ARP(pkt *stack.PacketBuffer) bool {
 // header with the IPv4 header.
 //
 // Returns true if the header was successfully parsed.
-func IPv4(pkt *stack.PacketBuffer) bool {
-	hdr, ok := pkt.Data.PullUp(header.IPv4MinimumSize)
+func IPv4(pkt stack.PacketBufferPtr) bool {
+	hdr, ok := pkt.Data().PullUp(header.IPv4MinimumSize)
 	if !ok {
 		return false
 	}
@@ -60,33 +59,38 @@ func IPv4(pkt *stack.PacketBuffer) bool {
 		return false
 	}
 	ipHdr = header.IPv4(hdr)
+	length := int(ipHdr.TotalLength()) - len(hdr)
+	if length < 0 {
+		return false
+	}
 
 	pkt.NetworkProtocolNumber = header.IPv4ProtocolNumber
-	pkt.Data.CapLength(int(ipHdr.TotalLength()) - len(hdr))
+	pkt.Data().CapLength(length)
 	return true
 }
 
 // IPv6 parses an IPv6 packet found in pkt.Data and populates pkt's network
 // header with the IPv6 header.
-func IPv6(pkt *stack.PacketBuffer) (proto tcpip.TransportProtocolNumber, fragID uint32, fragOffset uint16, fragMore bool, ok bool) {
-	hdr, ok := pkt.Data.PullUp(header.IPv6MinimumSize)
+func IPv6(pkt stack.PacketBufferPtr) (proto tcpip.TransportProtocolNumber, fragID uint32, fragOffset uint16, fragMore bool, ok bool) {
+	hdr, ok := pkt.Data().PullUp(header.IPv6MinimumSize)
 	if !ok {
 		return 0, 0, 0, false, false
 	}
 	ipHdr := header.IPv6(hdr)
 
-	// dataClone consists of:
-	// - Any IPv6 header bytes after the first 40 (i.e. extensions).
-	// - The transport header, if present.
-	// - Any other payload data.
-	views := [8]buffer.View{}
-	dataClone := pkt.Data.Clone(views[:])
-	dataClone.TrimFront(header.IPv6MinimumSize)
-	it := header.MakeIPv6PayloadIterator(header.IPv6ExtensionHeaderIdentifier(ipHdr.NextHeader()), dataClone)
+	// Create a VV to parse the packet. We don't plan to modify anything here.
+	// dataVV consists of:
+	//	- Any IPv6 header bytes after the first 40 (i.e. extensions).
+	//	- The transport header, if present.
+	//	- Any other payload data.
+	dataBuf := pkt.Data().ToBuffer()
+	dataBuf.TrimFront(header.IPv6MinimumSize)
+	it := header.MakeIPv6PayloadIterator(header.IPv6ExtensionHeaderIdentifier(ipHdr.NextHeader()), dataBuf)
+	defer it.Release()
 
 	// Iterate over the IPv6 extensions to find their length.
 	var nextHdr tcpip.TransportProtocolNumber
-	var extensionsSize int
+	var extensionsSize int64
 
 traverseExtensions:
 	for {
@@ -98,39 +102,52 @@ traverseExtensions:
 		// If we exhaust the extension list, the entire packet is the IPv6 header
 		// and (possibly) extensions.
 		if done {
-			extensionsSize = dataClone.Size()
+			extensionsSize = dataBuf.Size()
 			break
 		}
 
 		switch extHdr := extHdr.(type) {
 		case header.IPv6FragmentExtHdr:
+			if extHdr.IsAtomic() {
+				// This fragment extension header indicates that this packet is an
+				// atomic fragment. An atomic fragment is a fragment that contains
+				// all the data required to reassemble a full packet. As per RFC 6946,
+				// atomic fragments must not interfere with "normal" fragmented traffic
+				// so we skip processing the fragment instead of feeding it through the
+				// reassembly process below.
+				continue
+			}
+
 			if fragID == 0 && fragOffset == 0 && !fragMore {
 				fragID = extHdr.ID()
 				fragOffset = extHdr.FragmentOffset()
 				fragMore = extHdr.More()
 			}
 			rawPayload := it.AsRawHeader(true /* consume */)
-			extensionsSize = dataClone.Size() - rawPayload.Buf.Size()
+			extensionsSize = dataBuf.Size() - rawPayload.Buf.Size()
+			rawPayload.Release()
+			extHdr.Release()
 			break traverseExtensions
 
 		case header.IPv6RawPayloadHeader:
 			// We've found the payload after any extensions.
-			extensionsSize = dataClone.Size() - extHdr.Buf.Size()
+			extensionsSize = dataBuf.Size() - extHdr.Buf.Size()
 			nextHdr = tcpip.TransportProtocolNumber(extHdr.Identifier)
+			extHdr.Release()
 			break traverseExtensions
-
 		default:
+			extHdr.Release()
 			// Any other extension is a no-op, keep looping until we find the payload.
 		}
 	}
 
 	// Put the IPv6 header with extensions in pkt.NetworkHeader().
-	hdr, ok = pkt.NetworkHeader().Consume(header.IPv6MinimumSize + extensionsSize)
+	hdr, ok = pkt.NetworkHeader().Consume(header.IPv6MinimumSize + int(extensionsSize))
 	if !ok {
-		panic(fmt.Sprintf("pkt.Data should have at least %d bytes, but only has %d.", header.IPv6MinimumSize+extensionsSize, pkt.Data.Size()))
+		panic(fmt.Sprintf("pkt.Data should have at least %d bytes, but only has %d.", header.IPv6MinimumSize+extensionsSize, pkt.Data().Size()))
 	}
 	ipHdr = header.IPv6(hdr)
-	pkt.Data.CapLength(int(ipHdr.PayloadLength()))
+	pkt.Data().CapLength(int(ipHdr.PayloadLength()))
 	pkt.NetworkProtocolNumber = header.IPv6ProtocolNumber
 
 	return nextHdr, fragID, fragOffset, fragMore, true
@@ -140,7 +157,7 @@ traverseExtensions:
 // header with the UDP header.
 //
 // Returns true if the header was successfully parsed.
-func UDP(pkt *stack.PacketBuffer) bool {
+func UDP(pkt stack.PacketBufferPtr) bool {
 	_, ok := pkt.TransportHeader().Consume(header.UDPMinimumSize)
 	pkt.TransportProtocolNumber = header.UDPProtocolNumber
 	return ok
@@ -150,16 +167,16 @@ func UDP(pkt *stack.PacketBuffer) bool {
 // header with the TCP header.
 //
 // Returns true if the header was successfully parsed.
-func TCP(pkt *stack.PacketBuffer) bool {
+func TCP(pkt stack.PacketBufferPtr) bool {
 	// TCP header is variable length, peek at it first.
 	hdrLen := header.TCPMinimumSize
-	hdr, ok := pkt.Data.PullUp(hdrLen)
+	hdr, ok := pkt.Data().PullUp(hdrLen)
 	if !ok {
 		return false
 	}
 
 	// If the header has options, pull those up as well.
-	if offset := int(header.TCP(hdr).DataOffset()); offset > header.TCPMinimumSize && offset <= pkt.Data.Size() {
+	if offset := int(header.TCP(hdr).DataOffset()); offset > header.TCPMinimumSize && offset <= pkt.Data().Size() {
 		// TODO(gvisor.dev/issue/2404): Figure out whether to reject this kind of
 		// packets.
 		hdrLen = offset
@@ -168,4 +185,59 @@ func TCP(pkt *stack.PacketBuffer) bool {
 	_, ok = pkt.TransportHeader().Consume(hdrLen)
 	pkt.TransportProtocolNumber = header.TCPProtocolNumber
 	return ok
+}
+
+// ICMPv4 populates the packet buffer's transport header with an ICMPv4 header,
+// if present.
+//
+// Returns true if an ICMPv4 header was successfully parsed.
+func ICMPv4(pkt stack.PacketBufferPtr) bool {
+	if _, ok := pkt.TransportHeader().Consume(header.ICMPv4MinimumSize); ok {
+		pkt.TransportProtocolNumber = header.ICMPv4ProtocolNumber
+		return true
+	}
+	return false
+}
+
+// ICMPv6 populates the packet buffer's transport header with an ICMPv4 header,
+// if present.
+//
+// Returns true if an ICMPv6 header was successfully parsed.
+func ICMPv6(pkt stack.PacketBufferPtr) bool {
+	hdr, ok := pkt.Data().PullUp(header.ICMPv6MinimumSize)
+	if !ok {
+		return false
+	}
+
+	h := header.ICMPv6(hdr)
+	switch h.Type() {
+	case header.ICMPv6RouterSolicit,
+		header.ICMPv6RouterAdvert,
+		header.ICMPv6NeighborSolicit,
+		header.ICMPv6NeighborAdvert,
+		header.ICMPv6RedirectMsg,
+		header.ICMPv6MulticastListenerQuery,
+		header.ICMPv6MulticastListenerReport,
+		header.ICMPv6MulticastListenerV2Report,
+		header.ICMPv6MulticastListenerDone:
+		size := pkt.Data().Size()
+		if _, ok := pkt.TransportHeader().Consume(size); !ok {
+			panic(fmt.Sprintf("expected to consume the full data of size = %d bytes into transport header", size))
+		}
+	case header.ICMPv6DstUnreachable,
+		header.ICMPv6PacketTooBig,
+		header.ICMPv6TimeExceeded,
+		header.ICMPv6ParamProblem,
+		header.ICMPv6EchoRequest,
+		header.ICMPv6EchoReply:
+		fallthrough
+	default:
+		if _, ok := pkt.TransportHeader().Consume(header.ICMPv6MinimumSize); !ok {
+			// Checked above if the packet buffer holds at least the minimum size for
+			// an ICMPv6 packet.
+			panic(fmt.Sprintf("expected to consume %d bytes", header.ICMPv6MinimumSize))
+		}
+	}
+	pkt.TransportProtocolNumber = header.ICMPv6ProtocolNumber
+	return true
 }

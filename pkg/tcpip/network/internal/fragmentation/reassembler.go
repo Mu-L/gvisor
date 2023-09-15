@@ -30,26 +30,26 @@ type hole struct {
 	final  bool
 	// pkt is the fragment packet if hole is filled. We keep the whole pkt rather
 	// than the fragmented payload to prevent binding to specific buffer types.
-	pkt *stack.PacketBuffer
+	pkt stack.PacketBufferPtr
 }
 
 type reassembler struct {
 	reassemblerEntry
-	id           FragmentID
-	memSize      int
-	proto        uint8
-	mu           sync.Mutex
-	holes        []hole
-	filled       int
-	done         bool
-	creationTime int64
-	pkt          *stack.PacketBuffer
+	id        FragmentID
+	memSize   int
+	proto     uint8
+	mu        sync.Mutex
+	holes     []hole
+	filled    int
+	done      bool
+	createdAt tcpip.MonotonicTime
+	pkt       stack.PacketBufferPtr
 }
 
 func newReassembler(id FragmentID, clock tcpip.Clock) *reassembler {
 	r := &reassembler{
-		id:           id,
-		creationTime: clock.NowMonotonic(),
+		id:        id,
+		createdAt: clock.NowMonotonic(),
 	}
 	r.holes = append(r.holes, hole{
 		first:  0,
@@ -60,7 +60,7 @@ func newReassembler(id FragmentID, clock tcpip.Clock) *reassembler {
 	return r
 }
 
-func (r *reassembler) process(first, last uint16, more bool, proto uint8, pkt *stack.PacketBuffer) (*stack.PacketBuffer, uint8, bool, int, error) {
+func (r *reassembler) process(first, last uint16, more bool, proto uint8, pkt stack.PacketBufferPtr) (stack.PacketBufferPtr, uint8, bool, int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.done {
@@ -133,7 +133,7 @@ func (r *reassembler) process(first, last uint16, more bool, proto uint8, pkt *s
 			last:   last,
 			filled: true,
 			final:  currentHole.final,
-			pkt:    pkt,
+			pkt:    pkt.IncRef(),
 		}
 		r.filled++
 		// For IPv6, it is possible to have different Protocol values between
@@ -145,10 +145,12 @@ func (r *reassembler) process(first, last uint16, more bool, proto uint8, pkt *s
 		// options received in the first fragment should be used - and they should
 		// override options from following fragments.
 		if first == 0 {
-			r.pkt = pkt
+			if !r.pkt.IsNil() {
+				r.pkt.DecRef()
+			}
+			r.pkt = pkt.IncRef()
 			r.proto = proto
 		}
-
 		break
 	}
 	if !holeFound {
@@ -165,12 +167,11 @@ func (r *reassembler) process(first, last uint16, more bool, proto uint8, pkt *s
 		return r.holes[i].first < r.holes[j].first
 	})
 
-	resPkt := r.holes[0].pkt
+	resPkt := r.holes[0].pkt.Clone()
 	for i := 1; i < len(r.holes); i++ {
-		fragPkt := r.holes[i].pkt
-		fragPkt.Data.ReadToVV(&resPkt.Data, fragPkt.Data.Size())
+		stack.MergeFragment(resPkt, r.holes[i].pkt)
 	}
-	return resPkt, r.proto, true, memConsumed, nil
+	return resPkt, r.proto, true /* done */, memConsumed, nil
 }
 
 func (r *reassembler) checkDoneOrMark() bool {

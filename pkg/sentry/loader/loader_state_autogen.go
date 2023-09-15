@@ -22,9 +22,11 @@ func (v *VDSO) StateFields() []string {
 
 func (v *VDSO) beforeSave() {}
 
+// +checklocksignore
 func (v *VDSO) StateSave(stateSinkObject state.Sink) {
 	v.beforeSave()
-	var phdrsValue []elfProgHeader = v.savePhdrs()
+	var phdrsValue []elfProgHeader
+	phdrsValue = v.savePhdrs()
 	stateSinkObject.SaveValue(4, phdrsValue)
 	stateSinkObject.Save(0, &v.ParamPage)
 	stateSinkObject.Save(1, &v.vdso)
@@ -34,12 +36,13 @@ func (v *VDSO) StateSave(stateSinkObject state.Sink) {
 
 func (v *VDSO) afterLoad() {}
 
+// +checklocksignore
 func (v *VDSO) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &v.ParamPage)
 	stateSourceObject.Load(1, &v.vdso)
 	stateSourceObject.Load(2, &v.os)
 	stateSourceObject.Load(3, &v.arch)
-	stateSourceObject.LoadValue(4, new([]elfProgHeader), func(y interface{}) { v.loadPhdrs(y.([]elfProgHeader)) })
+	stateSourceObject.LoadValue(4, new([]elfProgHeader), func(y any) { v.loadPhdrs(y.([]elfProgHeader)) })
 }
 
 func (e *elfProgHeader) StateTypeName() string {
@@ -61,6 +64,7 @@ func (e *elfProgHeader) StateFields() []string {
 
 func (e *elfProgHeader) beforeSave() {}
 
+// +checklocksignore
 func (e *elfProgHeader) StateSave(stateSinkObject state.Sink) {
 	e.beforeSave()
 	stateSinkObject.Save(0, &e.Type)
@@ -75,6 +79,7 @@ func (e *elfProgHeader) StateSave(stateSinkObject state.Sink) {
 
 func (e *elfProgHeader) afterLoad() {}
 
+// +checklocksignore
 func (e *elfProgHeader) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &e.Type)
 	stateSourceObject.Load(1, &e.Flags)

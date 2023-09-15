@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build msan
 // +build msan
 
 package filter
 
 import (
-	"syscall"
-
+	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/log"
 	"gvisor.dev/gvisor/pkg/seccomp"
 )
@@ -27,7 +27,7 @@ import (
 func instrumentationFilters() seccomp.SyscallRules {
 	log.Warningf("*** SECCOMP WARNING: MSAN is enabled: syscall filters less restrictive!")
 	return seccomp.SyscallRules{
-		syscall.SYS_SCHED_GETAFFINITY: {},
-		syscall.SYS_SET_ROBUST_LIST:   {},
+		unix.SYS_SCHED_GETAFFINITY: {},
+		unix.SYS_SET_ROBUST_LIST:   {},
 	}
 }

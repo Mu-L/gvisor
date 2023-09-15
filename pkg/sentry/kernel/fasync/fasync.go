@@ -17,13 +17,10 @@ package fasync
 
 import (
 	"gvisor.dev/gvisor/pkg/abi/linux"
-	"gvisor.dev/gvisor/pkg/sentry/arch"
-	"gvisor.dev/gvisor/pkg/sentry/fs"
+	"gvisor.dev/gvisor/pkg/errors/linuxerr"
 	"gvisor.dev/gvisor/pkg/sentry/kernel"
 	"gvisor.dev/gvisor/pkg/sentry/kernel/auth"
 	"gvisor.dev/gvisor/pkg/sentry/vfs"
-	"gvisor.dev/gvisor/pkg/sync"
-	"gvisor.dev/gvisor/pkg/syserror"
 	"gvisor.dev/gvisor/pkg/waiter"
 )
 
@@ -42,17 +39,9 @@ var bandTable = map[waiter.EventMask]int64{
 	waiter.EventHUp: linux.EPOLLHUP | linux.EPOLLERR,
 }
 
-// New returns a function that creates a new fs.FileAsync with the given file
-// descriptor.
-func New(fd int) func() fs.FileAsync {
-	return func() fs.FileAsync {
-		return &FileAsync{fd: fd}
-	}
-}
-
-// NewVFS2 returns a function that creates a new vfs.FileAsync with the given
+// New returns a function that creates a new vfs.FileAsync with the given
 // file descriptor.
-func NewVFS2(fd int) func() vfs.FileAsync {
+func New(fd int) func() vfs.FileAsync {
 	return func() vfs.FileAsync {
 		return &FileAsync{fd: fd}
 	}
@@ -77,12 +66,12 @@ type FileAsync struct {
 	// through the registration action itself.
 	//
 	// Lock ordering: regMu, mu.
-	regMu sync.Mutex `state:"nosave"`
+	regMu regMutex `state:"nosave"`
 
 	// mu protects all following fields.
 	//
 	// Lock ordering: e.mu, mu.
-	mu         sync.Mutex `state:"nosave"`
+	mu         fileMutex `state:"nosave"`
 	requester  *auth.Credentials
 	registered bool
 	// signal is the signal to deliver upon I/O being available.
@@ -96,18 +85,24 @@ type FileAsync struct {
 	recipientT  *kernel.Task
 }
 
-// Callback sends a signal.
-func (a *FileAsync) Callback(e *waiter.Entry, mask waiter.EventMask) {
+// NotifyEvent implements waiter.EventListener.NotifyEvent.
+func (a *FileAsync) NotifyEvent(mask waiter.EventMask) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	if !a.registered {
+		a.mu.Unlock()
 		return
 	}
+	// Read all the required fields which are lock protected from FileAsync
+	// and release the lock.
 	t := a.recipientT
 	tg := a.recipientTG
+	creds := a.requester
+	sig := a.signal
 	if a.recipientPG != nil {
 		tg = a.recipientPG.Originator()
 	}
+	a.mu.Unlock()
+
 	if tg != nil {
 		t = tg.Leader()
 	}
@@ -115,22 +110,22 @@ func (a *FileAsync) Callback(e *waiter.Entry, mask waiter.EventMask) {
 		// No recipient has been registered.
 		return
 	}
-	c := t.Credentials()
+	tCreds := t.Credentials()
 	// Logic from sigio_perm in fs/fcntl.c.
-	permCheck := (a.requester.EffectiveKUID == 0 ||
-		a.requester.EffectiveKUID == c.SavedKUID ||
-		a.requester.EffectiveKUID == c.RealKUID ||
-		a.requester.RealKUID == c.SavedKUID ||
-		a.requester.RealKUID == c.RealKUID)
+	permCheck := (creds.EffectiveKUID == 0 ||
+		creds.EffectiveKUID == tCreds.SavedKUID ||
+		creds.EffectiveKUID == tCreds.RealKUID ||
+		creds.RealKUID == tCreds.SavedKUID ||
+		creds.RealKUID == tCreds.RealKUID)
 	if !permCheck {
 		return
 	}
-	signalInfo := &arch.SignalInfo{
+	signalInfo := &linux.SignalInfo{
 		Signo: int32(linux.SIGIO),
-		Code:  arch.SignalInfoKernel,
+		Code:  linux.SI_KERNEL,
 	}
-	if a.signal != 0 {
-		signalInfo.Signo = int32(a.signal)
+	if sig != 0 {
+		signalInfo.Signo = int32(sig)
 		signalInfo.SetFD(uint32(a.fd))
 		var band int64
 		for m, bandCode := range bandTable {
@@ -140,29 +135,28 @@ func (a *FileAsync) Callback(e *waiter.Entry, mask waiter.EventMask) {
 		}
 		signalInfo.SetBand(band)
 	}
-	t.SendSignal(signalInfo)
+	if tg != nil {
+		t.SendGroupSignal(signalInfo)
+	} else {
+		t.SendSignal(signalInfo)
+	}
 }
 
 // Register sets the file which will be monitored for IO events.
 //
 // The file must not be currently registered.
-func (a *FileAsync) Register(w waiter.Waitable) {
+func (a *FileAsync) Register(w waiter.Waitable) error {
 	a.regMu.Lock()
 	defer a.regMu.Unlock()
 	a.mu.Lock()
-
 	if a.registered {
 		a.mu.Unlock()
 		panic("registering already registered file")
 	}
-
-	if a.e.Callback == nil {
-		a.e.Callback = a
-	}
+	a.e.Init(a, waiter.ReadableEvents|waiter.WritableEvents|waiter.EventErr|waiter.EventHUp)
 	a.registered = true
-
 	a.mu.Unlock()
-	w.EventRegister(&a.e, waiter.EventIn|waiter.EventOut|waiter.EventErr|waiter.EventHUp)
+	return w.EventRegister(&a.e)
 }
 
 // Unregister stops monitoring a file.
@@ -249,7 +243,7 @@ func (a *FileAsync) Signal() linux.Signal {
 // to send SIGIO.
 func (a *FileAsync) SetSignal(signal linux.Signal) error {
 	if signal != 0 && !signal.IsValid() {
-		return syserror.EINVAL
+		return linuxerr.EINVAL
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()

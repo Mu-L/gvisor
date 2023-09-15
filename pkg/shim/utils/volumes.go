@@ -15,26 +15,39 @@
 package utils
 
 import (
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"path/filepath"
 	"strings"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
-const volumeKeyPrefix = "dev.gvisor.spec.mount."
+const (
+	volumeKeyPrefix = "dev.gvisor.spec.mount."
 
+	// devshmName is the volume name used for /dev/shm. Pick a name that is
+	// unlikely to be used.
+	devshmName = "gvisorinternaldevshm"
+
+	// emptyDirVolumesDir is the directory inside kubeletPodsDir/{uid}/volumes/
+	// that hosts all the EmptyDir volumes used by the pod.
+	emptyDirVolumesDir = "kubernetes.io~empty-dir"
+)
+
+// The directory structure for volumes is as follows:
+// /var/lib/kubelet/pods/{uid}/volumes/{type} where `uid` is the pod UID and
+// `type` is the volume type.
 var kubeletPodsDir = "/var/lib/kubelet/pods"
 
 // volumeName gets volume name from volume annotation key, example:
+//
 //	dev.gvisor.spec.mount.NAME.share
 func volumeName(k string) string {
 	return strings.SplitN(strings.TrimPrefix(k, volumeKeyPrefix), ".", 2)[0]
 }
 
 // volumeFieldName gets volume field name from volume annotation key, example:
+//
 //	`type` is the field of dev.gvisor.spec.mount.NAME.type
 func volumeFieldName(k string) string {
 	parts := strings.Split(strings.TrimPrefix(k, volumeKeyPrefix), ".")
@@ -67,6 +80,11 @@ func volumeSourceKey(volume string) string {
 	return volumeKeyPrefix + volume + ".source"
 }
 
+// volumeLifecycleKey constructs the annotation key for volume lifecycle.
+func volumeLifecycleKey(volume string) string {
+	return volumeKeyPrefix + volume + ".lifecycle"
+}
+
 // volumePath searches the volume path in the kubelet pod directory.
 func volumePath(volume, uid string) (string, error) {
 	// TODO: Support subpath when gvisor supports pod volume bind mount.
@@ -89,21 +107,19 @@ func isVolumePath(volume, path string) (bool, error) {
 }
 
 // UpdateVolumeAnnotations add necessary OCI annotations for gvisor
-// volume optimization.
-func UpdateVolumeAnnotations(bundle string, s *specs.Spec) error {
-	var (
-		uid string
-		err error
-	)
+// volume optimization. Returns true if the spec was modified.
+func UpdateVolumeAnnotations(s *specs.Spec) (bool, error) {
+	var uid string
 	if IsSandbox(s) {
+		var err error
 		uid, err = podUID(s)
 		if err != nil {
 			// Skip if we can't get pod UID, because this doesn't work
 			// for containerd 1.1.
-			return nil
+			return false, nil
 		}
 	}
-	var updated bool
+	updated := false
 	for k, v := range s.Annotations {
 		if !isVolumeKey(k) {
 			continue
@@ -113,43 +129,123 @@ func UpdateVolumeAnnotations(bundle string, s *specs.Spec) error {
 		}
 		volume := volumeName(k)
 		if uid != "" {
-			// This is a sandbox.
+			// This is a sandbox. Add source and lifecycle annotations for volumes.
 			path, err := volumePath(volume, uid)
 			if err != nil {
-				return fmt.Errorf("get volume path for %q: %w", volume, err)
+				return false, fmt.Errorf("get volume path for %q: %w", volume, err)
 			}
 			s.Annotations[volumeSourceKey(volume)] = path
+			// TODO(b/142076984): Remove the lifecycle setting logic after it has
+			// been adopted in GKE admission plugin.
+			lifecycleKey := volumeLifecycleKey(volume)
+			if _, ok := s.Annotations[lifecycleKey]; !ok {
+				// Only set lifecycle annotation if not already set.
+				if strings.Contains(path, emptyDirVolumesDir) {
+					// Emptydir is created and destroyed with the pod.
+					s.Annotations[lifecycleKey] = "pod"
+				}
+			}
 			updated = true
 		} else {
 			// This is a container.
 			for i := range s.Mounts {
-				// An error is returned for sandbox if source
-				// annotation is not successfully applied, so
-				// it is guaranteed that the source annotation
-				// for sandbox has already been successfully
-				// applied at this point.
+				// An error is returned for sandbox if source annotation is not
+				// successfully applied, so it is guaranteed that the source annotation
+				// for sandbox has already been successfully applied at this point.
 				//
-				// The volume name is unique inside a pod, so
-				// matching without podUID is fine here.
+				// The volume name is unique inside a pod, so matching without podUID
+				// is fine here.
 				//
-				// TODO: Pass podUID down to shim for containers to do
-				// more accurate matching.
+				// TODO: Pass podUID down to shim for containers to do more accurate
+				// matching.
 				if yes, _ := isVolumePath(volume, s.Mounts[i].Source); yes {
-					// gVisor requires the container mount type to match
-					// sandbox mount type.
-					s.Mounts[i].Type = v
+					// Container mount type must match the sandbox's mount type.
+					changeMountType(&s.Mounts[i], v)
 					updated = true
 				}
 			}
 		}
 	}
-	if !updated {
-		return nil
+
+	if ok, err := configureShm(s); err != nil {
+		return false, err
+	} else if ok {
+		updated = true
 	}
-	// Update bundle.
-	b, err := json.Marshal(s)
-	if err != nil {
-		return err
+
+	return updated, nil
+}
+
+// configureShm sets up annotations to mount /dev/shm as a pod shared tmpfs
+// mount inside containers.
+//
+// Pods are configured to mount /dev/shm to a common path in the host, so it's
+// shared among containers in the same pod. In gVisor, /dev/shm must be
+// converted to a tmpfs mount inside the sandbox, otherwise shm_open(3) doesn't
+// use it (see where_is_shmfs() in glibc). Mount annotation hints are used to
+// instruct runsc to mount the same tmpfs volume in all containers inside the
+// pod.
+func configureShm(s *specs.Spec) (bool, error) {
+	const (
+		shmPath    = "/dev/shm"
+		devshmType = "tmpfs"
+	)
+
+	// Some containers contain a duplicate mount entry for /dev/shm using tmpfs.
+	// If this is detected, remove the extraneous entry to ensure the correct one
+	// is used.
+	duplicate := -1
+	for i, m := range s.Mounts {
+		if m.Destination == shmPath && m.Type == devshmType {
+			duplicate = i
+			break
+		}
 	}
-	return ioutil.WriteFile(filepath.Join(bundle, "config.json"), b, 0666)
+
+	updated := false
+	for i := range s.Mounts {
+		m := &s.Mounts[i]
+		if m.Destination == shmPath && m.Type == "bind" {
+			if IsSandbox(s) {
+				s.Annotations[volumeKeyPrefix+devshmName+".source"] = m.Source
+				s.Annotations[volumeKeyPrefix+devshmName+".type"] = devshmType
+				s.Annotations[volumeKeyPrefix+devshmName+".share"] = "pod"
+				s.Annotations[volumeKeyPrefix+devshmName+".lifecycle"] = "pod"
+				// Given that we don't have visibility into mount options for all
+				// containers, assume broad access for the master mount (it's tmpfs
+				// inside the sandbox anyways) and apply options to subcontainers as
+				// they bind mount individually.
+				s.Annotations[volumeKeyPrefix+devshmName+".options"] = "rw"
+			}
+
+			changeMountType(m, devshmType)
+			updated = true
+
+			// Remove the duplicate entry now that we found the shared /dev/shm mount.
+			if duplicate >= 0 {
+				s.Mounts = append(s.Mounts[:duplicate], s.Mounts[duplicate+1:]...)
+			}
+			break
+		}
+	}
+	return updated, nil
+}
+
+func changeMountType(m *specs.Mount, newType string) {
+	m.Type = newType
+
+	// OCI spec allows bind mounts to be specified in options only. So if new type
+	// is not bind, remove bind/rbind from options.
+	//
+	// "For bind mounts (when options include either bind or rbind), the type is
+	// a dummy, often "none" (not listed in /proc/filesystems)."
+	if newType != "bind" {
+		newOpts := make([]string, 0, len(m.Options))
+		for _, opt := range m.Options {
+			if opt != "rbind" && opt != "bind" {
+				newOpts = append(newOpts, opt)
+			}
+		}
+		m.Options = newOpts
+	}
 }

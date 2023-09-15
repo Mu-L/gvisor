@@ -2,26 +2,34 @@ package unix
 
 import (
 	"fmt"
-	"sync/atomic"
 
-	"gvisor.dev/gvisor/pkg/refsvfs2"
+	"gvisor.dev/gvisor/pkg/atomicbitops"
+	"gvisor.dev/gvisor/pkg/refs"
 )
 
 // enableLogging indicates whether reference-related events should be logged (with
 // stack traces). This is false by default and should only be set to true for
 // debugging purposes, as it can generate an extremely large amount of output
 // and drastically degrade performance.
-const socketOperationsenableLogging = false
+const socketenableLogging = false
 
 // obj is used to customize logging. Note that we use a pointer to T so that
 // we do not copy the entire object when passed as a format parameter.
-var socketOperationsobj *SocketOperations
+var socketobj *Socket
 
 // Refs implements refs.RefCounter. It keeps a reference count using atomic
 // operations and calls the destructor when the count reaches zero.
 //
+// NOTE: Do not introduce additional fields to the Refs struct. It is used by
+// many filesystem objects, and we want to keep it as small as possible (i.e.,
+// the same size as using an int64 directly) to avoid taking up extra cache
+// space. In general, this template should not be extended at the cost of
+// performance. If it does not offer enough flexibility for a particular object
+// (example: b/187877947), we should implement the RefCounter/CheckedObject
+// interfaces manually.
+//
 // +stateify savable
-type socketOperationsRefs struct {
+type socketRefs struct {
 	// refCount is composed of two fields:
 	//
 	//	[32-bit speculative references]:[32-bit real references]
@@ -29,68 +37,69 @@ type socketOperationsRefs struct {
 	// Speculative references are used for TryIncRef, to avoid a CompareAndSwap
 	// loop. See IncRef, DecRef and TryIncRef for details of how these fields are
 	// used.
-	refCount int64
+	refCount atomicbitops.Int64
 }
 
 // InitRefs initializes r with one reference and, if enabled, activates leak
 // checking.
-func (r *socketOperationsRefs) InitRefs() {
-	atomic.StoreInt64(&r.refCount, 1)
-	refsvfs2.Register(r)
+func (r *socketRefs) InitRefs() {
+
+	r.refCount.RacyStore(1)
+	refs.Register(r)
 }
 
-// RefType implements refsvfs2.CheckedObject.RefType.
-func (r *socketOperationsRefs) RefType() string {
-	return fmt.Sprintf("%T", socketOperationsobj)[1:]
+// RefType implements refs.CheckedObject.RefType.
+func (r *socketRefs) RefType() string {
+	return fmt.Sprintf("%T", socketobj)[1:]
 }
 
-// LeakMessage implements refsvfs2.CheckedObject.LeakMessage.
-func (r *socketOperationsRefs) LeakMessage() string {
+// LeakMessage implements refs.CheckedObject.LeakMessage.
+func (r *socketRefs) LeakMessage() string {
 	return fmt.Sprintf("[%s %p] reference count of %d instead of 0", r.RefType(), r, r.ReadRefs())
 }
 
-// LogRefs implements refsvfs2.CheckedObject.LogRefs.
-func (r *socketOperationsRefs) LogRefs() bool {
-	return socketOperationsenableLogging
+// LogRefs implements refs.CheckedObject.LogRefs.
+func (r *socketRefs) LogRefs() bool {
+	return socketenableLogging
 }
 
 // ReadRefs returns the current number of references. The returned count is
 // inherently racy and is unsafe to use without external synchronization.
-func (r *socketOperationsRefs) ReadRefs() int64 {
-	return atomic.LoadInt64(&r.refCount)
+func (r *socketRefs) ReadRefs() int64 {
+	return r.refCount.Load()
 }
 
 // IncRef implements refs.RefCounter.IncRef.
 //
 //go:nosplit
-func (r *socketOperationsRefs) IncRef() {
-	v := atomic.AddInt64(&r.refCount, 1)
-	if socketOperationsenableLogging {
-		refsvfs2.LogIncRef(r, v)
+func (r *socketRefs) IncRef() {
+	v := r.refCount.Add(1)
+	if socketenableLogging {
+		refs.LogIncRef(r, v)
 	}
 	if v <= 1 {
 		panic(fmt.Sprintf("Incrementing non-positive count %p on %s", r, r.RefType()))
 	}
 }
 
-// TryIncRef implements refs.RefCounter.TryIncRef.
+// TryIncRef implements refs.TryRefCounter.TryIncRef.
 //
 // To do this safely without a loop, a speculative reference is first acquired
 // on the object. This allows multiple concurrent TryIncRef calls to distinguish
 // other TryIncRef calls from genuine references held.
 //
 //go:nosplit
-func (r *socketOperationsRefs) TryIncRef() bool {
+func (r *socketRefs) TryIncRef() bool {
 	const speculativeRef = 1 << 32
-	if v := atomic.AddInt64(&r.refCount, speculativeRef); int32(v) == 0 {
+	if v := r.refCount.Add(speculativeRef); int32(v) == 0 {
 
-		atomic.AddInt64(&r.refCount, -speculativeRef)
+		r.refCount.Add(-speculativeRef)
 		return false
 	}
 
-	v := atomic.AddInt64(&r.refCount, -speculativeRef+1)
-	if socketOperationsenableLogging {
-		refsvfs2.LogTryIncRef(r, v)
+	v := r.refCount.Add(-speculativeRef + 1)
+	if socketenableLogging {
+		refs.LogTryIncRef(r, v)
 	}
 	return true
 }
@@ -107,17 +116,17 @@ func (r *socketOperationsRefs) TryIncRef() bool {
 //	A: TryIncRef [transform speculative to real]
 //
 //go:nosplit
-func (r *socketOperationsRefs) DecRef(destroy func()) {
-	v := atomic.AddInt64(&r.refCount, -1)
-	if socketOperationsenableLogging {
-		refsvfs2.LogDecRef(r, v)
+func (r *socketRefs) DecRef(destroy func()) {
+	v := r.refCount.Add(-1)
+	if socketenableLogging {
+		refs.LogDecRef(r, v)
 	}
 	switch {
 	case v < 0:
 		panic(fmt.Sprintf("Decrementing non-positive ref count %p, owned by %s", r, r.RefType()))
 
 	case v == 0:
-		refsvfs2.Unregister(r)
+		refs.Unregister(r)
 
 		if destroy != nil {
 			destroy()
@@ -125,8 +134,8 @@ func (r *socketOperationsRefs) DecRef(destroy func()) {
 	}
 }
 
-func (r *socketOperationsRefs) afterLoad() {
+func (r *socketRefs) afterLoad() {
 	if r.ReadRefs() > 0 {
-		refsvfs2.Register(r)
+		refs.Register(r)
 	}
 }

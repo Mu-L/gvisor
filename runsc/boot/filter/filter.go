@@ -20,18 +20,24 @@ package filter
 import (
 	"gvisor.dev/gvisor/pkg/log"
 	"gvisor.dev/gvisor/pkg/seccomp"
+	"gvisor.dev/gvisor/pkg/sentry/devices/accel"
+	"gvisor.dev/gvisor/pkg/sentry/devices/nvproxy"
 	"gvisor.dev/gvisor/pkg/sentry/platform"
 )
 
 // Options are seccomp filter related options.
 type Options struct {
-	Platform      platform.Platform
-	HostNetwork   bool
-	ProfileEnable bool
-	ControllerFD  int
+	Platform              platform.Platform
+	HostNetwork           bool
+	HostNetworkRawSockets bool
+	HostFilesystem        bool
+	ProfileEnable         bool
+	NVProxy               bool
+	TPUProxy              bool
+	ControllerFD          int
 }
 
-// Install installs seccomp filters for based on the given platform.
+// Install seccomp filters based on the given platform.
 func Install(opt Options) error {
 	s := allowedSyscalls
 	s.Merge(controlServerFilters(opt.ControllerFD))
@@ -41,17 +47,33 @@ func Install(opt Options) error {
 	s.Merge(instrumentationFilters())
 
 	if opt.HostNetwork {
-		Report("host networking enabled: syscall filters less restrictive!")
-		s.Merge(hostInetFilters())
+		if opt.HostNetworkRawSockets {
+			Report("host networking (with raw sockets) enabled: syscall filters less restrictive!")
+		} else {
+			Report("host networking enabled: syscall filters less restrictive!")
+		}
+		s.Merge(hostInetFilters(opt.HostNetworkRawSockets))
 	}
 	if opt.ProfileEnable {
 		Report("profile enabled: syscall filters less restrictive!")
 		s.Merge(profileFilters())
 	}
+	if opt.HostFilesystem {
+		Report("host filesystem enabled: syscall filters less restrictive!")
+		s.Merge(hostFilesystemFilters())
+	}
+	if opt.NVProxy {
+		Report("Nvidia GPU driver proxy enabled: syscall filters less restrictive!")
+		s.Merge(nvproxy.Filters())
+	}
+	if opt.TPUProxy {
+		Report("TPU device proxy enabled: syscall filters less restrictive!")
+		s.Merge(accel.Filters())
+	}
 
 	s.Merge(opt.Platform.SyscallFilters())
 
-	return seccomp.Install(s)
+	return seccomp.Install(s, seccomp.DenyNewExecMappings)
 }
 
 // Report writes a warning message to the log.

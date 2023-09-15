@@ -21,11 +21,11 @@ import (
 
 	"gvisor.dev/gvisor/pkg/abi/linux"
 	"gvisor.dev/gvisor/pkg/context"
+	"gvisor.dev/gvisor/pkg/errors/linuxerr"
 	"gvisor.dev/gvisor/pkg/sentry/fsimpl/kernfs"
 	"gvisor.dev/gvisor/pkg/sentry/kernel"
 	"gvisor.dev/gvisor/pkg/sentry/kernel/auth"
 	"gvisor.dev/gvisor/pkg/sentry/vfs"
-	"gvisor.dev/gvisor/pkg/syserror"
 )
 
 const (
@@ -54,6 +54,15 @@ type filesystem struct {
 	devMinor uint32
 }
 
+func (fs *filesystem) StatFSAt(ctx context.Context, rp *vfs.ResolvingPath) (linux.Statfs, error) {
+	d, err := fs.GetDentryAt(ctx, rp, vfs.GetDentryOptions{})
+	if err != nil {
+		return linux.Statfs{}, err
+	}
+	d.DecRef(ctx)
+	return vfs.GenericStatFS(linux.PROC_SUPER_MAGIC), nil
+}
+
 // GetFilesystem implements vfs.FilesystemType.GetFilesystem.
 func (ft FilesystemType) GetFilesystem(ctx context.Context, vfsObj *vfs.VirtualFilesystem, creds *auth.Credentials, source string, opts vfs.GetFilesystemOptions) (*vfs.Filesystem, *vfs.Dentry, error) {
 	k := kernel.KernelFromContext(ctx)
@@ -76,7 +85,7 @@ func (ft FilesystemType) GetFilesystem(ctx context.Context, vfsObj *vfs.VirtualF
 		maxCachedDentries, err = strconv.ParseUint(str, 10, 64)
 		if err != nil {
 			ctx.Warningf("proc.FilesystemType.GetFilesystem: invalid dentry cache limit: dentry_cache_limit=%s", str)
-			return nil, nil, syserror.EINVAL
+			return nil, nil, linuxerr.EINVAL
 		}
 	}
 
@@ -86,13 +95,13 @@ func (ft FilesystemType) GetFilesystem(ctx context.Context, vfsObj *vfs.VirtualF
 	procfs.MaxCachedDentries = maxCachedDentries
 	procfs.VFSFilesystem().Init(vfsObj, &ft, procfs)
 
-	var cgroups map[string]string
+	var fakeCgroupControllers map[string]string
 	if opts.InternalData != nil {
 		data := opts.InternalData.(*InternalData)
-		cgroups = data.Cgroups
+		fakeCgroupControllers = data.Cgroups
 	}
 
-	inode := procfs.newTasksInode(ctx, k, pidns, cgroups)
+	inode := procfs.newTasksInode(ctx, k, pidns, fakeCgroupControllers)
 	var dentry kernfs.Dentry
 	dentry.InitRoot(&procfs.Filesystem, inode)
 	return procfs.VFSFilesystem(), dentry.VFSDentry(), nil
@@ -102,6 +111,11 @@ func (ft FilesystemType) GetFilesystem(ctx context.Context, vfsObj *vfs.VirtualF
 func (fs *filesystem) Release(ctx context.Context) {
 	fs.Filesystem.VFSFilesystem().VirtualFilesystem().PutAnonBlockDevMinor(fs.devMinor)
 	fs.Filesystem.Release(ctx)
+}
+
+// MountOptions implements vfs.FilesystemImpl.MountOptions.
+func (fs *filesystem) MountOptions() string {
+	return fmt.Sprintf("dentry_cache_limit=%d", fs.MaxCachedDentries)
 }
 
 // dynamicInode is an overfitted interface for common Inodes with

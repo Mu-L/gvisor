@@ -6,14 +6,6 @@ import (
 	"gvisor.dev/gvisor/pkg/state"
 )
 
-func (fs *RightsFiles) StateTypeName() string {
-	return "pkg/sentry/socket/control.RightsFiles"
-}
-
-func (fs *RightsFiles) StateFields() []string {
-	return nil
-}
-
 func (c *scmCredentials) StateTypeName() string {
 	return "pkg/sentry/socket/control.scmCredentials"
 }
@@ -28,6 +20,7 @@ func (c *scmCredentials) StateFields() []string {
 
 func (c *scmCredentials) beforeSave() {}
 
+// +checklocksignore
 func (c *scmCredentials) StateSave(stateSinkObject state.Sink) {
 	c.beforeSave()
 	stateSinkObject.Save(0, &c.t)
@@ -37,22 +30,22 @@ func (c *scmCredentials) StateSave(stateSinkObject state.Sink) {
 
 func (c *scmCredentials) afterLoad() {}
 
+// +checklocksignore
 func (c *scmCredentials) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &c.t)
 	stateSourceObject.Load(1, &c.kuid)
 	stateSourceObject.Load(2, &c.kgid)
 }
 
-func (fs *RightsFilesVFS2) StateTypeName() string {
-	return "pkg/sentry/socket/control.RightsFilesVFS2"
+func (fs *RightsFiles) StateTypeName() string {
+	return "pkg/sentry/socket/control.RightsFiles"
 }
 
-func (fs *RightsFilesVFS2) StateFields() []string {
+func (fs *RightsFiles) StateFields() []string {
 	return nil
 }
 
 func init() {
-	state.Register((*RightsFiles)(nil))
 	state.Register((*scmCredentials)(nil))
-	state.Register((*RightsFilesVFS2)(nil))
+	state.Register((*RightsFiles)(nil))
 }

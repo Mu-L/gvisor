@@ -21,18 +21,18 @@ import (
 	"io"
 	"os"
 	"sync"
-	"sync/atomic"
-	"syscall"
 
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/fifo"
 	runc "github.com/containerd/go-runc"
+	"golang.org/x/sys/unix"
+	"gvisor.dev/gvisor/pkg/atomicbitops"
 )
 
 // TODO(random-liu): This file can be a util.
 
 var bufPool = sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		buffer := make([]byte, 32<<10)
 		return &buffer
 	},
@@ -89,25 +89,25 @@ func copyPipes(ctx context.Context, rio runc.IO, stdin, stdout, stderr string, w
 			fr io.Closer
 		)
 		if ok {
-			if fw, err = fifo.OpenFifo(ctx, i.name, syscall.O_WRONLY, 0); err != nil {
+			if fw, err = fifo.OpenFifo(ctx, i.name, unix.O_WRONLY, 0); err != nil {
 				return fmt.Errorf("gvisor-containerd-shim: opening %s failed: %s", i.name, err)
 			}
-			if fr, err = fifo.OpenFifo(ctx, i.name, syscall.O_RDONLY, 0); err != nil {
+			if fr, err = fifo.OpenFifo(ctx, i.name, unix.O_RDONLY, 0); err != nil {
 				return fmt.Errorf("gvisor-containerd-shim: opening %s failed: %s", i.name, err)
 			}
 		} else {
 			if sameFile != nil {
-				sameFile.count++
+				sameFile.count.Add(1)
 				i.dest(sameFile, nil)
 				continue
 			}
-			if fw, err = os.OpenFile(i.name, syscall.O_WRONLY|syscall.O_APPEND, 0); err != nil {
+			if fw, err = os.OpenFile(i.name, unix.O_WRONLY|unix.O_APPEND, 0); err != nil {
 				return fmt.Errorf("gvisor-containerd-shim: opening %s failed: %s", i.name, err)
 			}
 			if stdout == stderr {
 				sameFile = &countingWriteCloser{
 					WriteCloser: fw,
-					count:       1,
+					count:       atomicbitops.FromInt64(1),
 				}
 			}
 		}
@@ -116,7 +116,7 @@ func copyPipes(ctx context.Context, rio runc.IO, stdin, stdout, stderr string, w
 	if stdin == "" {
 		return nil
 	}
-	f, err := fifo.OpenFifo(context.Background(), stdin, syscall.O_RDONLY|syscall.O_NONBLOCK, 0)
+	f, err := fifo.OpenFifo(context.Background(), stdin, unix.O_RDONLY|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return fmt.Errorf("gvisor-containerd-shim: opening %s failed: %s", stdin, err)
 	}
@@ -134,11 +134,11 @@ func copyPipes(ctx context.Context, rio runc.IO, stdin, stdout, stderr string, w
 // countingWriteCloser masks io.Closer() until close has been invoked a certain number of times.
 type countingWriteCloser struct {
 	io.WriteCloser
-	count int64
+	count atomicbitops.Int64
 }
 
 func (c *countingWriteCloser) Close() error {
-	if atomic.AddInt64(&c.count, -1) > 0 {
+	if c.count.Add(-1) > 0 {
 		return nil
 	}
 	return c.WriteCloser.Close()

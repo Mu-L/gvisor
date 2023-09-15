@@ -23,6 +23,7 @@ import (
 
 	"gvisor.dev/gvisor/pkg/abi/linux"
 	"gvisor.dev/gvisor/pkg/context"
+	"gvisor.dev/gvisor/pkg/hostarch"
 	"gvisor.dev/gvisor/pkg/seccomp"
 	"gvisor.dev/gvisor/pkg/sentry/arch"
 	"gvisor.dev/gvisor/pkg/sentry/hostmm"
@@ -57,21 +58,29 @@ type Platform interface {
 	// is supported.
 	HaveGlobalMemoryBarrier() bool
 
+	// OwnsPageTables returns true if the Platform implementation manages any
+	// page tables directly (rather than via host mmap(2) etc.) As of this
+	// writing, this property is relevant because the AddressSpace interface
+	// does not support specification of memory type (cacheability), such that
+	// host FDs specifying memory types (e.g. device drivers) can only set them
+	// correctly in host-managed page tables.
+	OwnsPageTables() bool
+
 	// MapUnit returns the alignment used for optional mappings into this
 	// platform's AddressSpaces. Higher values indicate lower per-page costs
 	// for AddressSpace.MapFile. As a special case, a MapUnit of 0 indicates
 	// that the cost of AddressSpace.MapFile is effectively independent of the
 	// number of pages mapped. If MapUnit is non-zero, it must be a power-of-2
-	// multiple of usermem.PageSize.
+	// multiple of hostarch.PageSize.
 	MapUnit() uint64
 
 	// MinUserAddress returns the minimum mappable address on this
 	// platform.
-	MinUserAddress() usermem.Addr
+	MinUserAddress() hostarch.Addr
 
 	// MaxUserAddress returns the maximum mappable address on this
 	// platform.
-	MaxUserAddress() usermem.Addr
+	MaxUserAddress() hostarch.Addr
 
 	// NewAddressSpace returns a new memory context for this platform.
 	//
@@ -88,10 +97,10 @@ type Platform interface {
 	//
 	// In general, this blocking behavior only occurs when
 	// CooperativelySchedulesAddressSpace (above) returns false.
-	NewAddressSpace(mappingsID interface{}) (AddressSpace, <-chan struct{}, error)
+	NewAddressSpace(mappingsID any) (AddressSpace, <-chan struct{}, error)
 
 	// NewContext returns a new execution context.
-	NewContext() Context
+	NewContext(context.Context) Context
 
 	// PreemptAllCPUs causes all concurrent calls to Context.Switch(), as well
 	// as the first following call to Context.Switch() for each Context, to
@@ -166,20 +175,38 @@ func (UseHostProcessMemoryBarrier) GlobalMemoryBarrier() error {
 	return hostmm.GlobalMemoryBarrier()
 }
 
+// DoesOwnPageTables implements Platform.OwnsPageTables in the positive.
+type DoesOwnPageTables struct{}
+
+// OwnsPageTables implements Platform.OwnsPageTables.
+func (DoesOwnPageTables) OwnsPageTables() bool {
+	return true
+}
+
+// DoesNotOwnPageTables implements Platform.OwnsPageTables in the negative.
+type DoesNotOwnPageTables struct{}
+
+// OwnsPageTables implements Platform.OwnsPageTables.
+func (DoesNotOwnPageTables) OwnsPageTables() bool {
+	return false
+}
+
 // MemoryManager represents an abstraction above the platform address space
 // which manages memory mappings and their contents.
 type MemoryManager interface {
 	//usermem.IO provides access to the contents of a virtual memory space.
 	usermem.IO
 	// MMap establishes a memory mapping.
-	MMap(ctx context.Context, opts memmap.MMapOpts) (usermem.Addr, error)
+	MMap(ctx context.Context, opts memmap.MMapOpts) (hostarch.Addr, error)
 	// AddressSpace returns the AddressSpace bound to mm.
 	AddressSpace() AddressSpace
+	// FindVMAByName finds a vma with the specified name.
+	FindVMAByName(ar hostarch.AddrRange, hint string) (hostarch.Addr, uint64, error)
 }
 
 // Context represents the execution context for a single thread.
 type Context interface {
-	// Switch resumes execution of the thread specified by the arch.Context
+	// Switch resumes execution of the thread specified by the arch.Context64
 	// in the provided address space. This call will block while the thread
 	// is executing.
 	//
@@ -191,22 +218,22 @@ type Context interface {
 	//
 	// Switch may return one of the following special errors:
 	//
-	// - nil: The Context invoked a system call.
+	//	- nil: The Context invoked a system call.
 	//
-	// - ErrContextSignal: The Context was interrupted by a signal. The
-	// returned *arch.SignalInfo contains information about the signal. If
-	// arch.SignalInfo.Signo == SIGSEGV, the returned usermem.AccessType
-	// contains the access type of the triggering fault. The caller owns
-	// the returned SignalInfo.
+	//	- ErrContextSignal: The Context was interrupted by a signal. The
+	//		returned *linux.SignalInfo contains information about the signal. If
+	//		linux.SignalInfo.Signo == SIGSEGV, the returned hostarch.AccessType
+	//		contains the access type of the triggering fault. The caller owns
+	//		the returned SignalInfo.
 	//
-	// - ErrContextInterrupt: The Context was interrupted by a call to
-	// Interrupt(). Switch() may return ErrContextInterrupt spuriously. In
-	// particular, most implementations of Interrupt() will cause the first
-	// following call to Switch() to return ErrContextInterrupt if there is no
-	// concurrent call to Switch().
+	//	- ErrContextInterrupt: The Context was interrupted by a call to
+	//		Interrupt(). Switch() may return ErrContextInterrupt spuriously. In
+	//		particular, most implementations of Interrupt() will cause the first
+	//		following call to Switch() to return ErrContextInterrupt if there is no
+	//		concurrent call to Switch().
 	//
-	// - ErrContextCPUPreempted: See the definition of that error for details.
-	Switch(ctx context.Context, mm MemoryManager, ac arch.Context, cpu int32) (*arch.SignalInfo, usermem.AccessType, error)
+	//	- ErrContextCPUPreempted: See the definition of that error for details.
+	Switch(ctx context.Context, mm MemoryManager, ac *arch.Context64, cpu int32) (*linux.SignalInfo, hostarch.AccessType, error)
 
 	// PullFullState() pulls a full state of the application thread.
 	//
@@ -220,7 +247,7 @@ type Context interface {
 	// PullFullState() to load all registers and FPU state.
 	//
 	// Preconditions: The caller must be running on the task goroutine.
-	PullFullState(as AddressSpace, ac arch.Context)
+	PullFullState(as AddressSpace, ac *arch.Context64) error
 
 	// FullStateChanged() indicates that a thread state has been changed by
 	// the Sentry. This happens in case of the rt_sigreturn, execve, etc.
@@ -243,19 +270,16 @@ type Context interface {
 
 	// Release() releases any resources associated with this context.
 	Release()
+
+	// PrepareSleep() is called when the tread switches to the
+	// interruptible sleep state.
+	PrepareSleep()
 }
 
 var (
 	// ErrContextSignal is returned by Context.Switch() to indicate that the
 	// Context was interrupted by a signal.
 	ErrContextSignal = fmt.Errorf("interrupted by signal")
-
-	// ErrContextSignalCPUID is equivalent to ErrContextSignal, except that
-	// a check should be done for execution of the CPUID instruction. If
-	// the current instruction pointer is a CPUID instruction, then this
-	// should be emulated appropriately. If not, then the given signal
-	// should be handled per above.
-	ErrContextSignalCPUID = fmt.Errorf("interrupted by signal, possible CPUID")
 
 	// ErrContextInterrupt is returned by Context.Switch() to indicate that the
 	// Context was interrupted by a call to Context.Interrupt().
@@ -264,15 +288,15 @@ var (
 	// ErrContextCPUPreempted is returned by Context.Switch() to indicate that
 	// one of the following occurred:
 	//
-	// - The CPU executing the Context is not the CPU passed to
-	// Context.Switch().
+	//	- The CPU executing the Context is not the CPU passed to
+	//		Context.Switch().
 	//
-	// - The CPU executing the Context may have executed another Context since
-	// the last time it executed this one; or the CPU has previously executed
-	// another Context, and has never executed this one.
+	//	- The CPU executing the Context may have executed another Context since
+	//		the last time it executed this one; or the CPU has previously executed
+	//		another Context, and has never executed this one.
 	//
-	// - Platform.PreemptAllCPUs() was called since the last return from
-	// Context.Switch().
+	//	- Platform.PreemptAllCPUs() was called since the last return from
+	//		Context.Switch().
 	ErrContextCPUPreempted = fmt.Errorf("interrupted by CPU preemption")
 )
 
@@ -297,19 +321,19 @@ type AddressSpace interface {
 	// implementations may choose to ignore it.
 	//
 	// Preconditions:
-	// * addr and fr must be page-aligned.
-	// * fr.Length() > 0.
-	// * at.Any() == true.
-	// * At least one reference must be held on all pages in fr, and must
-	//   continue to be held as long as pages are mapped.
-	MapFile(addr usermem.Addr, f memmap.File, fr memmap.FileRange, at usermem.AccessType, precommit bool) error
+	//	* addr and fr must be page-aligned.
+	//	* fr.Length() > 0.
+	//	* at.Any() == true.
+	//	* At least one reference must be held on all pages in fr, and must
+	//		continue to be held as long as pages are mapped.
+	MapFile(addr hostarch.Addr, f memmap.File, fr memmap.FileRange, at hostarch.AccessType, precommit bool) error
 
 	// Unmap unmaps the given range.
 	//
 	// Preconditions:
-	// * addr is page-aligned.
-	// * length > 0.
-	Unmap(addr usermem.Addr, length uint64)
+	//	* addr is page-aligned.
+	//	* length > 0.
+	Unmap(addr hostarch.Addr, length uint64)
 
 	// Release releases this address space. After releasing, a new AddressSpace
 	// must be acquired via platform.NewAddressSpace().
@@ -337,67 +361,67 @@ type AddressSpaceIO interface {
 	// CopyOut copies len(src) bytes from src to the memory mapped at addr. It
 	// returns the number of bytes copied. If the number of bytes copied is <
 	// len(src), it returns a non-nil error explaining why.
-	CopyOut(addr usermem.Addr, src []byte) (int, error)
+	CopyOut(addr hostarch.Addr, src []byte) (int, error)
 
 	// CopyIn copies len(dst) bytes from the memory mapped at addr to dst.
 	// It returns the number of bytes copied. If the number of bytes copied is
 	// < len(dst), it returns a non-nil error explaining why.
-	CopyIn(addr usermem.Addr, dst []byte) (int, error)
+	CopyIn(addr hostarch.Addr, dst []byte) (int, error)
 
 	// ZeroOut sets toZero bytes to 0, starting at addr. It returns the number
 	// of bytes zeroed. If the number of bytes zeroed is < toZero, it returns a
 	// non-nil error explaining why.
-	ZeroOut(addr usermem.Addr, toZero uintptr) (uintptr, error)
+	ZeroOut(addr hostarch.Addr, toZero uintptr) (uintptr, error)
 
 	// SwapUint32 atomically sets the uint32 value at addr to new and returns
 	// the previous value.
 	//
 	// Preconditions: addr must be aligned to a 4-byte boundary.
-	SwapUint32(addr usermem.Addr, new uint32) (uint32, error)
+	SwapUint32(addr hostarch.Addr, new uint32) (uint32, error)
 
 	// CompareAndSwapUint32 atomically compares the uint32 value at addr to
 	// old; if they are equal, the value in memory is replaced by new. In
 	// either case, the previous value stored in memory is returned.
 	//
 	// Preconditions: addr must be aligned to a 4-byte boundary.
-	CompareAndSwapUint32(addr usermem.Addr, old, new uint32) (uint32, error)
+	CompareAndSwapUint32(addr hostarch.Addr, old, new uint32) (uint32, error)
 
 	// LoadUint32 atomically loads the uint32 value at addr and returns it.
 	//
 	// Preconditions: addr must be aligned to a 4-byte boundary.
-	LoadUint32(addr usermem.Addr) (uint32, error)
+	LoadUint32(addr hostarch.Addr) (uint32, error)
 }
 
 // NoAddressSpaceIO implements AddressSpaceIO methods by panicking.
 type NoAddressSpaceIO struct{}
 
 // CopyOut implements AddressSpaceIO.CopyOut.
-func (NoAddressSpaceIO) CopyOut(addr usermem.Addr, src []byte) (int, error) {
+func (NoAddressSpaceIO) CopyOut(addr hostarch.Addr, src []byte) (int, error) {
 	panic("This platform does not support AddressSpaceIO")
 }
 
 // CopyIn implements AddressSpaceIO.CopyIn.
-func (NoAddressSpaceIO) CopyIn(addr usermem.Addr, dst []byte) (int, error) {
+func (NoAddressSpaceIO) CopyIn(addr hostarch.Addr, dst []byte) (int, error) {
 	panic("This platform does not support AddressSpaceIO")
 }
 
 // ZeroOut implements AddressSpaceIO.ZeroOut.
-func (NoAddressSpaceIO) ZeroOut(addr usermem.Addr, toZero uintptr) (uintptr, error) {
+func (NoAddressSpaceIO) ZeroOut(addr hostarch.Addr, toZero uintptr) (uintptr, error) {
 	panic("This platform does not support AddressSpaceIO")
 }
 
 // SwapUint32 implements AddressSpaceIO.SwapUint32.
-func (NoAddressSpaceIO) SwapUint32(addr usermem.Addr, new uint32) (uint32, error) {
+func (NoAddressSpaceIO) SwapUint32(addr hostarch.Addr, new uint32) (uint32, error) {
 	panic("This platform does not support AddressSpaceIO")
 }
 
 // CompareAndSwapUint32 implements AddressSpaceIO.CompareAndSwapUint32.
-func (NoAddressSpaceIO) CompareAndSwapUint32(addr usermem.Addr, old, new uint32) (uint32, error) {
+func (NoAddressSpaceIO) CompareAndSwapUint32(addr hostarch.Addr, old, new uint32) (uint32, error) {
 	panic("This platform does not support AddressSpaceIO")
 }
 
 // LoadUint32 implements AddressSpaceIO.LoadUint32.
-func (NoAddressSpaceIO) LoadUint32(addr usermem.Addr) (uint32, error) {
+func (NoAddressSpaceIO) LoadUint32(addr hostarch.Addr) (uint32, error) {
 	panic("This platform does not support AddressSpaceIO")
 }
 
@@ -406,7 +430,7 @@ func (NoAddressSpaceIO) LoadUint32(addr usermem.Addr) (uint32, error) {
 // permissions.
 type SegmentationFault struct {
 	// Addr is the address at which the fault occurred.
-	Addr usermem.Addr
+	Addr hostarch.Addr
 }
 
 // Error implements error.Error.
@@ -430,9 +454,13 @@ type Constructor interface {
 	//
 	// Arguments:
 	//
-	// * deviceFile - the device file (e.g. /dev/kvm for the KVM platform).
+	//	* deviceFile - the device file (e.g. /dev/kvm for the KVM platform).
 	New(deviceFile *os.File) (Platform, error)
-	OpenDevice() (*os.File, error)
+
+	// OpenDevice opens the path to the device used by the platform.
+	// Passing in an empty string will use the default path for the device,
+	// e.g. "/dev/kvm" for the KVM platform.
+	OpenDevice(devicePath string) (*os.File, error)
 
 	// Requirements returns platform specific requirements.
 	Requirements() Requirements
@@ -444,6 +472,14 @@ var platforms = map[string]Constructor{}
 // Register registers a new platform type.
 func Register(name string, platform Constructor) {
 	platforms[name] = platform
+}
+
+// List lists available platforms.
+func List() (available []string) {
+	for name := range platforms {
+		available = append(available, name)
+	}
+	return
 }
 
 // Lookup looks up the platform constructor by name.

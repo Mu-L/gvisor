@@ -22,6 +22,7 @@ func (fd *directoryFD) StateFields() []string {
 
 func (fd *directoryFD) beforeSave() {}
 
+// +checklocksignore
 func (fd *directoryFD) StateSave(stateSinkObject state.Sink) {
 	fd.beforeSave()
 	stateSinkObject.Save(0, &fd.fileDescription)
@@ -33,6 +34,7 @@ func (fd *directoryFD) StateSave(stateSinkObject state.Sink) {
 
 func (fd *directoryFD) afterLoad() {}
 
+// +checklocksignore
 func (fd *directoryFD) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &fd.fileDescription)
 	stateSourceObject.Load(1, &fd.DirectoryFileDescriptionDefaultImpl)
@@ -51,12 +53,14 @@ func (fstype *FilesystemType) StateFields() []string {
 
 func (fstype *FilesystemType) beforeSave() {}
 
+// +checklocksignore
 func (fstype *FilesystemType) StateSave(stateSinkObject state.Sink) {
 	fstype.beforeSave()
 }
 
 func (fstype *FilesystemType) afterLoad() {}
 
+// +checklocksignore
 func (fstype *FilesystemType) StateLoad(stateSourceObject state.Source) {
 }
 
@@ -73,6 +77,7 @@ func (f *FilesystemOptions) StateFields() []string {
 
 func (f *FilesystemOptions) beforeSave() {}
 
+// +checklocksignore
 func (f *FilesystemOptions) StateSave(stateSinkObject state.Sink) {
 	f.beforeSave()
 	stateSinkObject.Save(0, &f.UpperRoot)
@@ -81,6 +86,7 @@ func (f *FilesystemOptions) StateSave(stateSinkObject state.Sink) {
 
 func (f *FilesystemOptions) afterLoad() {}
 
+// +checklocksignore
 func (f *FilesystemOptions) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &f.UpperRoot)
 	stateSourceObject.Load(1, &f.LowerRoots)
@@ -97,12 +103,15 @@ func (fs *filesystem) StateFields() []string {
 		"creds",
 		"dirDevMinor",
 		"lowerDevMinors",
+		"dirInoCache",
 		"lastDirIno",
+		"maxFilenameLen",
 	}
 }
 
 func (fs *filesystem) beforeSave() {}
 
+// +checklocksignore
 func (fs *filesystem) StateSave(stateSinkObject state.Sink) {
 	fs.beforeSave()
 	stateSinkObject.Save(0, &fs.vfsfs)
@@ -110,18 +119,23 @@ func (fs *filesystem) StateSave(stateSinkObject state.Sink) {
 	stateSinkObject.Save(2, &fs.creds)
 	stateSinkObject.Save(3, &fs.dirDevMinor)
 	stateSinkObject.Save(4, &fs.lowerDevMinors)
-	stateSinkObject.Save(5, &fs.lastDirIno)
+	stateSinkObject.Save(5, &fs.dirInoCache)
+	stateSinkObject.Save(6, &fs.lastDirIno)
+	stateSinkObject.Save(7, &fs.maxFilenameLen)
 }
 
 func (fs *filesystem) afterLoad() {}
 
+// +checklocksignore
 func (fs *filesystem) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &fs.vfsfs)
 	stateSourceObject.Load(1, &fs.opts)
 	stateSourceObject.Load(2, &fs.creds)
 	stateSourceObject.Load(3, &fs.dirDevMinor)
 	stateSourceObject.Load(4, &fs.lowerDevMinors)
-	stateSourceObject.Load(5, &fs.lastDirIno)
+	stateSourceObject.Load(5, &fs.dirInoCache)
+	stateSourceObject.Load(6, &fs.lastDirIno)
+	stateSourceObject.Load(7, &fs.maxFilenameLen)
 }
 
 func (l *layerDevNumber) StateTypeName() string {
@@ -137,6 +151,7 @@ func (l *layerDevNumber) StateFields() []string {
 
 func (l *layerDevNumber) beforeSave() {}
 
+// +checklocksignore
 func (l *layerDevNumber) StateSave(stateSinkObject state.Sink) {
 	l.beforeSave()
 	stateSinkObject.Save(0, &l.major)
@@ -145,9 +160,38 @@ func (l *layerDevNumber) StateSave(stateSinkObject state.Sink) {
 
 func (l *layerDevNumber) afterLoad() {}
 
+// +checklocksignore
 func (l *layerDevNumber) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &l.major)
 	stateSourceObject.Load(1, &l.minor)
+}
+
+func (l *layerDevNoAndIno) StateTypeName() string {
+	return "pkg/sentry/fsimpl/overlay.layerDevNoAndIno"
+}
+
+func (l *layerDevNoAndIno) StateFields() []string {
+	return []string{
+		"layerDevNumber",
+		"ino",
+	}
+}
+
+func (l *layerDevNoAndIno) beforeSave() {}
+
+// +checklocksignore
+func (l *layerDevNoAndIno) StateSave(stateSinkObject state.Sink) {
+	l.beforeSave()
+	stateSinkObject.Save(0, &l.layerDevNumber)
+	stateSinkObject.Save(1, &l.ino)
+}
+
+func (l *layerDevNoAndIno) afterLoad() {}
+
+// +checklocksignore
+func (l *layerDevNoAndIno) StateLoad(stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &l.layerDevNumber)
+	stateSourceObject.Load(1, &l.ino)
 }
 
 func (d *dentry) StateTypeName() string {
@@ -183,6 +227,7 @@ func (d *dentry) StateFields() []string {
 
 func (d *dentry) beforeSave() {}
 
+// +checklocksignore
 func (d *dentry) StateSave(stateSinkObject state.Sink) {
 	d.beforeSave()
 	stateSinkObject.Save(0, &d.vfsd)
@@ -209,6 +254,7 @@ func (d *dentry) StateSave(stateSinkObject state.Sink) {
 	stateSinkObject.Save(21, &d.watches)
 }
 
+// +checklocksignore
 func (d *dentry) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &d.vfsd)
 	stateSourceObject.Load(1, &d.refs)
@@ -249,6 +295,7 @@ func (fd *fileDescription) StateFields() []string {
 
 func (fd *fileDescription) beforeSave() {}
 
+// +checklocksignore
 func (fd *fileDescription) StateSave(stateSinkObject state.Sink) {
 	fd.beforeSave()
 	stateSinkObject.Save(0, &fd.vfsfd)
@@ -258,6 +305,7 @@ func (fd *fileDescription) StateSave(stateSinkObject state.Sink) {
 
 func (fd *fileDescription) afterLoad() {}
 
+// +checklocksignore
 func (fd *fileDescription) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &fd.vfsfd)
 	stateSourceObject.Load(1, &fd.FileDescriptionDefaultImpl)
@@ -274,29 +322,28 @@ func (fd *regularFileFD) StateFields() []string {
 		"copiedUp",
 		"cachedFD",
 		"cachedFlags",
-		"lowerWaiters",
 	}
 }
 
 func (fd *regularFileFD) beforeSave() {}
 
+// +checklocksignore
 func (fd *regularFileFD) StateSave(stateSinkObject state.Sink) {
 	fd.beforeSave()
 	stateSinkObject.Save(0, &fd.fileDescription)
 	stateSinkObject.Save(1, &fd.copiedUp)
 	stateSinkObject.Save(2, &fd.cachedFD)
 	stateSinkObject.Save(3, &fd.cachedFlags)
-	stateSinkObject.Save(4, &fd.lowerWaiters)
 }
 
 func (fd *regularFileFD) afterLoad() {}
 
+// +checklocksignore
 func (fd *regularFileFD) StateLoad(stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &fd.fileDescription)
 	stateSourceObject.Load(1, &fd.copiedUp)
 	stateSourceObject.Load(2, &fd.cachedFD)
 	stateSourceObject.Load(3, &fd.cachedFlags)
-	stateSourceObject.Load(4, &fd.lowerWaiters)
 }
 
 func init() {
@@ -305,6 +352,7 @@ func init() {
 	state.Register((*FilesystemOptions)(nil))
 	state.Register((*filesystem)(nil))
 	state.Register((*layerDevNumber)(nil))
+	state.Register((*layerDevNoAndIno)(nil))
 	state.Register((*dentry)(nil))
 	state.Register((*fileDescription)(nil))
 	state.Register((*regularFileFD)(nil))

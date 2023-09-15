@@ -15,27 +15,25 @@
 package overlay
 
 import (
-	"sync/atomic"
-
 	"gvisor.dev/gvisor/pkg/abi/linux"
 	"gvisor.dev/gvisor/pkg/context"
+	"gvisor.dev/gvisor/pkg/errors/linuxerr"
+	"gvisor.dev/gvisor/pkg/hostarch"
 	"gvisor.dev/gvisor/pkg/log"
 	"gvisor.dev/gvisor/pkg/sentry/arch"
 	"gvisor.dev/gvisor/pkg/sentry/kernel/auth"
 	"gvisor.dev/gvisor/pkg/sentry/memmap"
 	"gvisor.dev/gvisor/pkg/sentry/vfs"
-	"gvisor.dev/gvisor/pkg/sync"
-	"gvisor.dev/gvisor/pkg/syserror"
 	"gvisor.dev/gvisor/pkg/usermem"
 	"gvisor.dev/gvisor/pkg/waiter"
 )
 
 func (d *dentry) isRegularFile() bool {
-	return atomic.LoadUint32(&d.mode)&linux.S_IFMT == linux.S_IFREG
+	return d.mode.Load()&linux.S_IFMT == linux.S_IFREG
 }
 
 func (d *dentry) isSymlink() bool {
-	return atomic.LoadUint32(&d.mode)&linux.S_IFMT == linux.S_IFLNK
+	return d.mode.Load()&linux.S_IFMT == linux.S_IFLNK
 }
 
 func (d *dentry) readlink(ctx context.Context) (string, error) {
@@ -55,14 +53,10 @@ type regularFileFD struct {
 	// fileDescription.dentry().upperVD. cachedFlags is the last known value of
 	// cachedFD.StatusFlags(). copiedUp, cachedFD, and cachedFlags are
 	// protected by mu.
-	mu          sync.Mutex `state:"nosave"`
+	mu          regularFileFDMutex `state:"nosave"`
 	copiedUp    bool
 	cachedFD    *vfs.FileDescription
 	cachedFlags uint32
-
-	// If copiedUp is false, lowerWaiters contains all waiter.Entries
-	// registered with cachedFD. lowerWaiters is protected by mu.
-	lowerWaiters map[*waiter.Entry]waiter.EventMask
 }
 
 func (fd *regularFileFD) getCurrentFD(ctx context.Context) (*vfs.FileDescription, error) {
@@ -98,21 +92,10 @@ func (fd *regularFileFD) currentFDLocked(ctx context.Context) (*vfs.FileDescript
 				return nil, err
 			}
 		}
-		if len(fd.lowerWaiters) != 0 {
-			ready := upperFD.Readiness(^waiter.EventMask(0))
-			for e, mask := range fd.lowerWaiters {
-				fd.cachedFD.EventUnregister(e)
-				upperFD.EventRegister(e, mask)
-				if m := ready & mask; m != 0 {
-					e.Callback.Callback(e, m)
-				}
-			}
-		}
 		fd.cachedFD.DecRef(ctx)
 		fd.copiedUp = true
 		fd.cachedFD = upperFD
 		fd.cachedFlags = statusFlags
-		fd.lowerWaiters = nil
 	} else if fd.cachedFlags != statusFlags {
 		if err := fd.cachedFD.SetStatusFlags(ctx, d.fs.creds, statusFlags); err != nil {
 			return nil, err
@@ -183,8 +166,8 @@ func (fd *regularFileFD) Allocate(ctx context.Context, mode, offset, length uint
 // SetStat implements vfs.FileDescriptionImpl.SetStat.
 func (fd *regularFileFD) SetStat(ctx context.Context, opts vfs.SetStatOptions) error {
 	d := fd.dentry()
-	mode := linux.FileMode(atomic.LoadUint32(&d.mode))
-	if err := vfs.CheckSetStat(ctx, auth.CredentialsFromContext(ctx), &opts, mode, auth.KUID(atomic.LoadUint32(&d.uid)), auth.KGID(atomic.LoadUint32(&d.gid))); err != nil {
+	mode := linux.FileMode(d.mode.Load())
+	if err := vfs.CheckSetStat(ctx, auth.CredentialsFromContext(ctx), &opts, mode, auth.KUID(d.uid.Load()), auth.KGID(d.gid.Load())); err != nil {
 		return err
 	}
 	mnt := fd.vfsfd.Mount()
@@ -205,10 +188,21 @@ func (fd *regularFileFD) SetStat(ctx context.Context, opts vfs.SetStatOptions) e
 	if err := wrappedFD.SetStat(ctx, opts); err != nil {
 		return err
 	}
-	d.updateAfterSetStatLocked(&opts)
-	if ev := vfs.InotifyEventFromStatMask(opts.Stat.Mask); ev != 0 {
-		d.InotifyWithParent(ctx, ev, 0, vfs.InodeEvent)
+
+	// Changing owners or truncating may clear one or both of the setuid and
+	// setgid bits, so we may have to update opts before setting d.mode.
+	if opts.Stat.Mask&(linux.STATX_UID|linux.STATX_GID|linux.STATX_SIZE) != 0 {
+		stat, err := wrappedFD.Stat(ctx, vfs.StatOptions{
+			Mask: linux.STATX_MODE,
+		})
+		if err != nil {
+			return err
+		}
+		opts.Stat.Mode = stat.Mode
+		opts.Stat.Mask |= linux.STATX_MODE
 	}
+
+	d.updateAfterSetStatLocked(&opts)
 	return nil
 }
 
@@ -236,24 +230,17 @@ func (fd *regularFileFD) Readiness(mask waiter.EventMask) waiter.EventMask {
 }
 
 // EventRegister implements waiter.Waitable.EventRegister.
-func (fd *regularFileFD) EventRegister(e *waiter.Entry, mask waiter.EventMask) {
+func (fd *regularFileFD) EventRegister(e *waiter.Entry) error {
 	fd.mu.Lock()
 	defer fd.mu.Unlock()
 	wrappedFD, err := fd.currentFDLocked(context.Background())
 	if err != nil {
-		// TODO(b/171089913): Just use fd.cachedFD since EventRegister can't
-		// return an error. This is obviously wrong, but at least consistent
+		// TODO(b/171089913): Just use fd.cachedFD for backward compatibility
 		// with VFS1.
 		log.Warningf("overlay.regularFileFD.EventRegister: currentFDLocked failed: %v", err)
 		wrappedFD = fd.cachedFD
 	}
-	wrappedFD.EventRegister(e, mask)
-	if !fd.copiedUp {
-		if fd.lowerWaiters == nil {
-			fd.lowerWaiters = make(map[*waiter.Entry]waiter.EventMask)
-		}
-		fd.lowerWaiters[e] = mask
-	}
+	return wrappedFD.EventRegister(e)
 }
 
 // EventUnregister implements waiter.Waitable.EventUnregister.
@@ -261,9 +248,21 @@ func (fd *regularFileFD) EventUnregister(e *waiter.Entry) {
 	fd.mu.Lock()
 	defer fd.mu.Unlock()
 	fd.cachedFD.EventUnregister(e)
-	if !fd.copiedUp {
-		delete(fd.lowerWaiters, e)
+}
+
+// Epollable implements FileDescriptionImpl.Epollable.
+func (fd *regularFileFD) Epollable() bool {
+	fd.mu.Lock()
+	defer fd.mu.Unlock()
+	wrappedFD, err := fd.currentFDLocked(context.Background())
+	if err != nil {
+		// TODO(b/171089913): Just use fd.cachedFD since EventRegister can't
+		// return an error. This is obviously wrong, but at least consistent
+		// with VFS1.
+		log.Warningf("overlay.regularFileFD.Epollable: currentFDLocked failed: %v", err)
+		wrappedFD = fd.cachedFD
 	}
+	return wrappedFD.Epollable()
 }
 
 // PRead implements vfs.FileDescriptionImpl.PRead.
@@ -295,7 +294,11 @@ func (fd *regularFileFD) PWrite(ctx context.Context, src usermem.IOSequence, off
 		return 0, err
 	}
 	defer wrappedFD.DecRef(ctx)
-	return wrappedFD.PWrite(ctx, src, offset, opts)
+	n, err := wrappedFD.PWrite(ctx, src, offset, opts)
+	if err != nil {
+		return n, err
+	}
+	return fd.updateSetUserGroupIDs(ctx, wrappedFD, n)
 }
 
 // Write implements vfs.FileDescriptionImpl.Write.
@@ -307,7 +310,28 @@ func (fd *regularFileFD) Write(ctx context.Context, src usermem.IOSequence, opts
 	if err != nil {
 		return 0, err
 	}
-	return wrappedFD.Write(ctx, src, opts)
+	n, err := wrappedFD.Write(ctx, src, opts)
+	if err != nil {
+		return n, err
+	}
+	return fd.updateSetUserGroupIDs(ctx, wrappedFD, n)
+}
+
+func (fd *regularFileFD) updateSetUserGroupIDs(ctx context.Context, wrappedFD *vfs.FileDescription, written int64) (int64, error) {
+	// Writing can clear the setuid and/or setgid bits. We only have to
+	// check this if something was written and one of those bits was set.
+	dentry := fd.dentry()
+	if written == 0 || dentry.mode.Load()&(linux.S_ISUID|linux.S_ISGID) == 0 {
+		return written, nil
+	}
+	stat, err := wrappedFD.Stat(ctx, vfs.StatOptions{Mask: linux.STATX_MODE})
+	if err != nil {
+		return written, err
+	}
+	dentry.copyMu.Lock()
+	defer dentry.copyMu.Unlock()
+	dentry.mode.Store(uint32(stat.Mode))
+	return written, nil
 }
 
 // Seek implements vfs.FileDescriptionImpl.Seek.
@@ -341,13 +365,13 @@ func (fd *regularFileFD) Sync(ctx context.Context) error {
 }
 
 // Ioctl implements vfs.FileDescriptionImpl.Ioctl.
-func (fd *regularFileFD) Ioctl(ctx context.Context, uio usermem.IO, args arch.SyscallArguments) (uintptr, error) {
+func (fd *regularFileFD) Ioctl(ctx context.Context, uio usermem.IO, sysno uintptr, args arch.SyscallArguments) (uintptr, error) {
 	wrappedFD, err := fd.getCurrentFD(ctx)
 	if err != nil {
 		return 0, err
 	}
 	defer wrappedFD.DecRef(ctx)
-	return wrappedFD.Ioctl(ctx, uio, args)
+	return wrappedFD.Ioctl(ctx, uio, sysno, args)
 }
 
 // ConfigureMMap implements vfs.FileDescriptionImpl.ConfigureMMap.
@@ -363,14 +387,14 @@ func (fd *regularFileFD) ensureMappable(ctx context.Context, opts *memmap.MMapOp
 	d := fd.dentry()
 
 	// Fast path if we already have a Mappable for the current top layer.
-	if atomic.LoadUint32(&d.isMappable) != 0 {
+	if d.isMappable.Load() != 0 {
 		return nil
 	}
 
 	// Only permit mmap of regular files, since other file types may have
 	// unpredictable behavior when mmapped (e.g. /dev/zero).
-	if atomic.LoadUint32(&d.mode)&linux.S_IFMT != linux.S_IFREG {
-		return syserror.ENODEV
+	if d.mode.Load()&linux.S_IFMT != linux.S_IFREG {
+		return linuxerr.ENODEV
 	}
 
 	// Get a Mappable for the current top layer.
@@ -378,7 +402,7 @@ func (fd *regularFileFD) ensureMappable(ctx context.Context, opts *memmap.MMapOp
 	defer fd.mu.Unlock()
 	d.copyMu.RLock()
 	defer d.copyMu.RUnlock()
-	if atomic.LoadUint32(&d.isMappable) != 0 {
+	if d.isMappable.Load() != 0 {
 		return nil
 	}
 	wrappedFD, err := fd.currentFDLocked(ctx)
@@ -400,13 +424,13 @@ func (fd *regularFileFD) ensureMappable(ctx context.Context, opts *memmap.MMapOp
 	defer d.dataMu.Unlock()
 	if d.wrappedMappable == nil {
 		d.wrappedMappable = opts.Mappable
-		atomic.StoreUint32(&d.isMappable, 1)
+		d.isMappable.Store(1)
 	}
 	return nil
 }
 
 // AddMapping implements memmap.Mappable.AddMapping.
-func (d *dentry) AddMapping(ctx context.Context, ms memmap.MappingSpace, ar usermem.AddrRange, offset uint64, writable bool) error {
+func (d *dentry) AddMapping(ctx context.Context, ms memmap.MappingSpace, ar hostarch.AddrRange, offset uint64, writable bool) error {
 	d.mapsMu.Lock()
 	defer d.mapsMu.Unlock()
 	if err := d.wrappedMappable.AddMapping(ctx, ms, ar, offset, writable); err != nil {
@@ -419,7 +443,7 @@ func (d *dentry) AddMapping(ctx context.Context, ms memmap.MappingSpace, ar user
 }
 
 // RemoveMapping implements memmap.Mappable.RemoveMapping.
-func (d *dentry) RemoveMapping(ctx context.Context, ms memmap.MappingSpace, ar usermem.AddrRange, offset uint64, writable bool) {
+func (d *dentry) RemoveMapping(ctx context.Context, ms memmap.MappingSpace, ar hostarch.AddrRange, offset uint64, writable bool) {
 	d.mapsMu.Lock()
 	defer d.mapsMu.Unlock()
 	d.wrappedMappable.RemoveMapping(ctx, ms, ar, offset, writable)
@@ -429,7 +453,7 @@ func (d *dentry) RemoveMapping(ctx context.Context, ms memmap.MappingSpace, ar u
 }
 
 // CopyMapping implements memmap.Mappable.CopyMapping.
-func (d *dentry) CopyMapping(ctx context.Context, ms memmap.MappingSpace, srcAR, dstAR usermem.AddrRange, offset uint64, writable bool) error {
+func (d *dentry) CopyMapping(ctx context.Context, ms memmap.MappingSpace, srcAR, dstAR hostarch.AddrRange, offset uint64, writable bool) error {
 	d.mapsMu.Lock()
 	defer d.mapsMu.Unlock()
 	if err := d.wrappedMappable.CopyMapping(ctx, ms, srcAR, dstAR, offset, writable); err != nil {
@@ -442,7 +466,7 @@ func (d *dentry) CopyMapping(ctx context.Context, ms memmap.MappingSpace, srcAR,
 }
 
 // Translate implements memmap.Mappable.Translate.
-func (d *dentry) Translate(ctx context.Context, required, optional memmap.MappableRange, at usermem.AccessType) ([]memmap.Translation, error) {
+func (d *dentry) Translate(ctx context.Context, required, optional memmap.MappableRange, at hostarch.AccessType) ([]memmap.Translation, error) {
 	d.dataMu.RLock()
 	defer d.dataMu.RUnlock()
 	return d.wrappedMappable.Translate(ctx, required, optional, at)

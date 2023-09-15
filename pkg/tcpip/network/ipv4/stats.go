@@ -52,7 +52,7 @@ type sharedStats struct {
 // LINT.IfChange(multiCounterICMPv4PacketStats)
 
 type multiCounterICMPv4PacketStats struct {
-	echo           tcpip.MultiCounterStat
+	echoRequest    tcpip.MultiCounterStat
 	echoReply      tcpip.MultiCounterStat
 	dstUnreachable tcpip.MultiCounterStat
 	srcQuench      tcpip.MultiCounterStat
@@ -66,7 +66,7 @@ type multiCounterICMPv4PacketStats struct {
 }
 
 func (m *multiCounterICMPv4PacketStats) init(a, b *tcpip.ICMPv4PacketStats) {
-	m.echo.Init(a.Echo, b.Echo)
+	m.echoRequest.Init(a.EchoRequest, b.EchoRequest)
 	m.echoReply.Init(a.EchoReply, b.EchoReply)
 	m.dstUnreachable.Init(a.DstUnreachable, b.DstUnreachable)
 	m.srcQuench.Init(a.SrcQuench, b.SrcQuench)
@@ -131,6 +131,7 @@ type multiCounterIGMPPacketStats struct {
 	membershipQuery    tcpip.MultiCounterStat
 	v1MembershipReport tcpip.MultiCounterStat
 	v2MembershipReport tcpip.MultiCounterStat
+	v3MembershipReport tcpip.MultiCounterStat
 	leaveGroup         tcpip.MultiCounterStat
 }
 
@@ -138,6 +139,7 @@ func (m *multiCounterIGMPPacketStats) init(a, b *tcpip.IGMPPacketStats) {
 	m.membershipQuery.Init(a.MembershipQuery, b.MembershipQuery)
 	m.v1MembershipReport.Init(a.V1MembershipReport, b.V1MembershipReport)
 	m.v2MembershipReport.Init(a.V2MembershipReport, b.V2MembershipReport)
+	m.v3MembershipReport.Init(a.V3MembershipReport, b.V3MembershipReport)
 	m.leaveGroup.Init(a.LeaveGroup, b.LeaveGroup)
 }
 

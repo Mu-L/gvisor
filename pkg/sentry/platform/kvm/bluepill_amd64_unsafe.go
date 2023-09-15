@@ -12,14 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build amd64
 // +build amd64
 
 package kvm
 
 import (
-	"syscall"
 	"unsafe"
 
+	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/ring0"
 	"gvisor.dev/gvisor/pkg/sentry/arch"
 )
@@ -68,8 +69,8 @@ func getHypercallID(addr uintptr) int {
 func bluepillStopGuest(c *vCPU) {
 	// Interrupt: we must have requested an interrupt
 	// window; set the interrupt line.
-	if _, _, errno := syscall.RawSyscall(
-		syscall.SYS_IOCTL,
+	if _, _, errno := unix.RawSyscall(
+		unix.SYS_IOCTL,
 		uintptr(c.fd),
 		_KVM_INTERRUPT,
 		uintptr(unsafe.Pointer(&bounce))); errno != 0 {
@@ -83,8 +84,8 @@ func bluepillStopGuest(c *vCPU) {
 //
 //go:nosplit
 func bluepillSigBus(c *vCPU) {
-	if _, _, errno := syscall.RawSyscall( // escapes: no.
-		syscall.SYS_IOCTL,
+	if _, _, errno := unix.RawSyscall( // escapes: no.
+		unix.SYS_IOCTL,
 		uintptr(c.fd),
 		_KVM_NMI, 0); errno != 0 {
 		throw("NMI injection failed")

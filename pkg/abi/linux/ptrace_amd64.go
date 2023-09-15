@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build amd64
 // +build amd64
 
 package linux
@@ -49,4 +50,20 @@ type PtraceRegs struct {
 	Es       uint64
 	Fs       uint64
 	Gs       uint64
+}
+
+// InstructionPointer returns the address of the next instruction to
+// be executed.
+func (p *PtraceRegs) InstructionPointer() uint64 {
+	return p.Rip
+}
+
+// StackPointer returns the address of the Stack pointer.
+func (p *PtraceRegs) StackPointer() uint64 {
+	return p.Rsp
+}
+
+// SetStackPointer sets the stack pointer to the specified value.
+func (p *PtraceRegs) SetStackPointer(sp uint64) {
+	p.Rsp = sp
 }
