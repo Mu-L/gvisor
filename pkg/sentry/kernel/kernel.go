@@ -79,7 +79,6 @@ import (
 	"gvisor.dev/gvisor/pkg/sentry/vfs"
 	"gvisor.dev/gvisor/pkg/state"
 	"gvisor.dev/gvisor/pkg/sync"
-	"gvisor.dev/gvisor/pkg/tcpip"
 )
 
 // IOUringEnabled is set to true when IO_URING is enabled. Added as a global to
@@ -806,8 +805,6 @@ func (k *Kernel) LoadFrom(ctx context.Context, r io.Reader, loadMFs bool, timeRe
 		return vfs.PrependErrMsg("vfs.CompleteRestore() failed", err)
 	}
 
-	tcpip.AsyncLoading.Wait()
-
 	log.Infof("Overall load took [%s] after async work", time.Since(loadStart))
 
 	// Applications may size per-cpu structures based on k.applicationCores, so
@@ -1088,16 +1085,7 @@ func (k *Kernel) CreateProcess(args CreateProcessArgs) (*ThreadGroup, ThreadID, 
 	if se != nil {
 		return nil, 0, errors.New(se.String())
 	}
-	var vfsCaps linux.VfsNsCapData
-	if len(image.FileCaps()) != 0 {
-		var err error
-		vfsCaps, err = auth.VfsCapDataOf([]byte(image.FileCaps()))
-		if err != nil {
-			return nil, 0, err
-		}
-	}
-	creds, err := auth.CapsFromVfsCaps(vfsCaps, args.Credentials)
-	if err != nil {
+	if err := auth.UpdateCredsForNewTask(args.Credentials, image.FileCaps(), args.Filename); err != nil {
 		return nil, 0, err
 	}
 	args.FDTable.IncRef()
@@ -1109,7 +1097,7 @@ func (k *Kernel) CreateProcess(args CreateProcessArgs) (*ThreadGroup, ThreadID, 
 		TaskImage:        image,
 		FSContext:        fsContext,
 		FDTable:          args.FDTable,
-		Credentials:      creds,
+		Credentials:      args.Credentials,
 		NetworkNamespace: k.RootNetworkNamespace(),
 		AllowedCPUMask:   sched.NewFullCPUSet(k.applicationCores),
 		UTSNamespace:     args.UTSNamespace,
