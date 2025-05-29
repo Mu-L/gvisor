@@ -365,7 +365,7 @@ docker-tests: load-basic $(RUNTIME_BIN)
 	@$(call install_runtime,$(RUNTIME)-dcache,--fdlimit=2000 --dcache=100) # Used by TestDentryCacheLimit.
 	@$(call install_runtime,$(RUNTIME)-host-uds,--host-uds=all) # Used by TestHostSocketConnect.
 	@$(call install_runtime,$(RUNTIME)-overlay,--overlay2=all:self) # Used by TestOverlay*.
-	@$(call install_runtime,$(RUNTIME)-TESTONLY-save-restore-netstack,--TESTONLY-save-restore-netstack=true) # Used by TestRestoreListenConnWithNetstackSR.
+	@$(call install_runtime,$(RUNTIME)-save-restore-netstack,--save-restore-netstack=true) # Used by TestRestoreListenConnWithNetstackSR.
 	@$(call test_runtime,$(RUNTIME),$(INTEGRATION_TARGETS) --test_env=TEST_SAVE_RESTORE_NETSTACK=true //test/e2e:integration_runtime_test //test/e2e:runtime_in_docker_test)
 .PHONY: docker-tests
 
@@ -417,7 +417,7 @@ iptables-tests: load-iptables $(RUNTIME_BIN)
 	@$(call install_runtime,$(RUNTIME),--net-raw)
 	@$(call test_runtime,$(RUNTIME),--test_env=TEST_NET_RAW=true //test/iptables:iptables_test)
 	@$(call install_runtime,$(RUNTIME)-nftables,--net-raw --reproduce-nftables)
-	@$(call test_runtime,$(RUNTIME)-nftables, --test_output=all //test/iptables:nftables_test --test_arg=$(RUNTIME)-nftables)
+	@$(call test_runtime,$(RUNTIME)-nftables,--test_env=TEST_NET_RAW=true --test_output=all //test/iptables:nftables_test)
 .PHONY: iptables-tests
 
 packetdrill-tests: load-packetdrill $(RUNTIME_BIN)

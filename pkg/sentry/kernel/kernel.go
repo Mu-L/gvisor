@@ -53,6 +53,7 @@ import (
 	"gvisor.dev/gvisor/pkg/log"
 	"gvisor.dev/gvisor/pkg/refs"
 	"gvisor.dev/gvisor/pkg/sentry/arch"
+	"gvisor.dev/gvisor/pkg/sentry/devices/nvproxy/nvconf"
 	"gvisor.dev/gvisor/pkg/sentry/fsimpl/nsfs"
 	"gvisor.dev/gvisor/pkg/sentry/fsimpl/pipefs"
 	"gvisor.dev/gvisor/pkg/sentry/fsimpl/sockfs"
@@ -79,7 +80,6 @@ import (
 	"gvisor.dev/gvisor/pkg/sentry/vfs"
 	"gvisor.dev/gvisor/pkg/state"
 	"gvisor.dev/gvisor/pkg/sync"
-	"gvisor.dev/gvisor/pkg/tcpip"
 )
 
 // IOUringEnabled is set to true when IO_URING is enabled. Added as a global to
@@ -122,6 +122,24 @@ type CgroupMount struct {
 	Fs    *vfs.Filesystem
 	Root  *vfs.Dentry
 	Mount *vfs.Mount
+}
+
+// SaveRestoreExecConfig contains the configuration for the save/restore binary.
+//
+// +stateify savable
+type SaveRestoreExecConfig struct {
+	// Argv is the argv to the save/restore binary. The binary path is expected to
+	// be argv[0]. The specified binary is executed with an environment variable
+	// (GVISOR_SAVE_RESTORE_AUTO_EXEC_MODE) set to "save" before the kernel is
+	// saved, "restore" after the kernel is restored and restarted, and "resume"
+	// after the kernel is saved and resumed.
+	Argv []string
+	// Timeout is the timeout for the save/restore binary. If the binary fails to
+	// exit within this timeout the save/restore operation will fail.
+	Timeout time.Duration
+	// LeaderTask is the task in the kernel that the save/restore binary will run
+	// under.
+	LeaderTask *Task
 }
 
 // Kernel represents an emulated Linux kernel. It must be initialized by calling
@@ -370,6 +388,14 @@ type Kernel struct {
 
 	// UnixSocketOpts stores configuration options for management of unix sockets.
 	UnixSocketOpts transport.UnixSocketOpts
+
+	// SaveRestoreExecConfig stores configuration options for the save/restore
+	// exec binary.
+	SaveRestoreExecConfig *SaveRestoreExecConfig
+
+	// NvidiaDriverVersion is the NVIDIA driver version configured for this
+	// sandbox.
+	NvidiaDriverVersion nvconf.DriverVersion
 }
 
 // InitKernelArgs holds arguments to Init.
@@ -806,8 +832,6 @@ func (k *Kernel) LoadFrom(ctx context.Context, r io.Reader, loadMFs bool, timeRe
 		return vfs.PrependErrMsg("vfs.CompleteRestore() failed", err)
 	}
 
-	tcpip.AsyncLoading.Wait()
-
 	log.Infof("Overall load took [%s] after async work", time.Since(loadStart))
 
 	// Applications may size per-cpu structures based on k.applicationCores, so
@@ -1088,16 +1112,7 @@ func (k *Kernel) CreateProcess(args CreateProcessArgs) (*ThreadGroup, ThreadID, 
 	if se != nil {
 		return nil, 0, errors.New(se.String())
 	}
-	var vfsCaps linux.VfsNsCapData
-	if len(image.FileCaps()) != 0 {
-		var err error
-		vfsCaps, err = auth.VfsCapDataOf([]byte(image.FileCaps()))
-		if err != nil {
-			return nil, 0, err
-		}
-	}
-	creds, err := auth.CapsFromVfsCaps(vfsCaps, args.Credentials)
-	if err != nil {
+	if err := auth.UpdateCredsForNewTask(args.Credentials, image.FileCaps(), args.Filename); err != nil {
 		return nil, 0, err
 	}
 	args.FDTable.IncRef()
@@ -1109,7 +1124,7 @@ func (k *Kernel) CreateProcess(args CreateProcessArgs) (*ThreadGroup, ThreadID, 
 		TaskImage:        image,
 		FSContext:        fsContext,
 		FDTable:          args.FDTable,
-		Credentials:      creds,
+		Credentials:      args.Credentials,
 		NetworkNamespace: k.RootNetworkNamespace(),
 		AllowedCPUMask:   sched.NewFullCPUSet(k.applicationCores),
 		UTSNamespace:     args.UTSNamespace,

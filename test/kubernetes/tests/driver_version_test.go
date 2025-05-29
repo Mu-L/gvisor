@@ -1,4 +1,4 @@
-// Copyright 2024 The gVisor Authors.
+// Copyright 2025 The gVisor Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,21 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !false
-// +build !false
-
-package boot
+package driver
 
 import (
-	specs "github.com/opencontainers/runtime-spec/specs-go"
-	"gvisor.dev/gvisor/pkg/sentry/fsimpl/proc"
-	"gvisor.dev/gvisor/runsc/config"
+	"context"
+	"testing"
+
+	"gvisor.dev/gvisor/test/kubernetes/k8sctx/kubectlctx"
 )
 
-func newProcInternalData(conf *config.Config, _ *specs.Spec) *proc.InternalData {
-	return &proc.InternalData{
-		GVisorMarkerFile: conf.GVisorMarkerFile,
+// TestDriverVersion tests that a trivial alpine container runs correctly.
+func TestDriverVersion(t *testing.T) {
+	ctx := context.Background()
+	k8sCtx, err := kubectlctx.New(ctx)
+	if err != nil {
+		t.Fatalf("Failed to get kubernetes context: %v", err)
 	}
+	cluster, releaseFn := k8sCtx.Cluster(ctx, t)
+	defer releaseFn()
+	RunDriverVersion(ctx, t, k8sCtx, cluster)
 }
-
-func (l *Loader) kernelInitExtra() {}
